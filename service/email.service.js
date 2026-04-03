@@ -33,3 +33,30 @@ exports.sendVerificationEmail = async (email, token) => {
     `,
   });
 };
+
+
+exports.sendResetPasswordEmail = async(email,token) =>{
+ 
+   const resetURL = `${process.env.BASE_URL}/api/auth/reset-password?token=${token}`;
+
+  await transporter.sendMail({
+    from :`"Oulamauna" <${process.env.EMAIL_USER}>`,
+    to:email,
+     subject: "Password Reset Request",
+    html: `
+      <h2>Reset Your Password</h2>
+      <p>Click the link below to reset your password. It expires in <b>1 hour</b>.</p>
+      <a href="${resetURL}" style="
+        display: inline-block;
+        padding: 10px 20px;
+        background-color: #4CAF50;
+        color: white;
+        text-decoration: none;
+        border-radius: 5px;
+      ">
+        Reset Password
+      </a>
+      <p style="margin-top: 15px;">If you did not request a password reset, you can safely ignore this email.</p>
+    `
+  })
+}

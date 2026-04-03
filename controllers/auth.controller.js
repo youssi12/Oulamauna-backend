@@ -2,7 +2,7 @@ const db = require("../config/db");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const { sendVerificationEmail } = require("../service/email.service");
+const { sendVerificationEmail ,sendResetPasswordEmail} = require("../service/email.service");
 require("dotenv").config();
 
 
@@ -182,7 +182,7 @@ exports.login = async (req, res) => {
 exports.getme = async (req,res)=>{
     try {
       //replace role_id with role
-        const [rows]=await db.query(`SELECT id, username, email, role, is_banned, created_at FROM users WHERE id = ?`,[req.user.id]);
+        const [rows]=await db.query(`SELECT id, username, email, role_id, is_banned, created_at FROM users WHERE id = ?`,[req.user.id]);
         if (rows.length === 0)
       return res.status(404).json({ message: "User not found" });
     return res.json(rows[0]);
@@ -195,3 +195,65 @@ exports.logout = (req, res) => {
   res.clearCookie("token", cookieOptions);
   res.json({ message: "Logged out successfully" });
 };
+
+exports.forgotPassword = async (req,res) => {
+  
+  const {email} = req.body;
+  if (!email) return res.status(400).json({ message: "Email is required" });
+
+  try {
+    const [rows] = await db.query(`SELECT id from users where email = ?`,[email])
+     if(rows.length===0) return res.status(404).json({message:"User not found"});
+
+     const user = rows[0];
+     const token = crypto.randomBytes(32).toString("hex");
+     const expiresAt = new Date(Date.now()+60*60*1000);
+     await db.query(
+      `INSERT INTO password_resets (user_id,token,expires_at) VALUES (?,?,?)`,
+     [user.id,token,expiresAt]);
+
+    
+     await sendResetPasswordEmail(email,token)
+  
+     res.json({ message: "Password reset email sent. Check your inbox." });
+  
+  
+  
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+}
+
+exports.resetPassword = async (req,res) =>{
+  const { token } = req.query;
+  if(!token )
+    return res.status(400).json({ message: "Token required" });
+ 
+  const {newPassword} = req.body;
+  if(!newPassword)
+    return res.status(400).json({ message: "new password required" });
+try {
+  const [rows] = await db.query(`SELECT * FROM password_resets where token =?`,[token]);
+ 
+ if (rows.length === 0)
+     return res.status(400).json({ message: "Invalid token" });
+ 
+ const reset = rows[0];
+    if (new Date() > new Date(reset.expires_at)) return res.status(400).json({ message: "Token expired" });
+
+
+  const salt = await bcrypt.genSalt(12);
+  const hashedPassword = await bcrypt.hash(newPassword, salt);
+ 
+ 
+  await db.query(`UPDATE users SET password_hash = ? WHERE id = ?`, [hashedPassword, reset.user_id]);
+
+    await db.query(`DELETE FROM password_resets WHERE token = ?`, [token]);
+
+     res.json({ message: "Password has been reset successfully." });
+ 
+} catch (error) {
+   res.status(500).json({ message: "Server error", error: error.message });
+
+}
+}
