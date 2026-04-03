@@ -181,7 +181,8 @@ exports.login = async (req, res) => {
 
 exports.getme = async (req,res)=>{
     try {
-        const [rows]=await db.query(`SELECT id, username, email, role_id, is_banned, created_at FROM users WHERE id = ?`,[req.user.id]);
+      //replace role_id with role
+        const [rows]=await db.query(`SELECT id, username, email, role, is_banned, created_at FROM users WHERE id = ?`,[req.user.id]);
         if (rows.length === 0)
       return res.status(404).json({ message: "User not found" });
     return res.json(rows[0]);
