@@ -2,11 +2,11 @@
   "name": "backend",
   "version": "1.0.0",
   "main": "app.js",
-  "scripts": {
-    "build": "npx prisma generate",
-    "start": "npx prisma db push && node app.js",
-    "dev": "npx prisma db push && nodemon app.js"
-  },
+   "scripts": {
+  "build": "npx prisma generate && npx prisma db push",
+  "start": "node app.js",
+  "dev": "npx prisma db push && nodemon app.js"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
