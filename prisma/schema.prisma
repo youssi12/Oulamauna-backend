@@ -1,0 +1,347 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model bibliography {
+  bibliography_id Int       @id @default(autoincrement())
+  scholar_id      Int?
+  title           String?   @db.VarChar(255)
+  citation        String?   @db.Text
+  url             String?   @db.VarChar(255)
+  created_by      Int?
+  created_at      DateTime? @db.Timestamp(0)
+  scholars        scholars? @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "bibliography_ibfk_1")
+  users           users?    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "bibliography_ibfk_2")
+
+  @@index([created_by], map: "created_by")
+  @@index([scholar_id], map: "scholar_id")
+}
+
+model blog_comments {
+  comment_id Int         @id @default(autoincrement())
+  post_id    Int?
+  user_id    Int?
+  content    String?     @db.Text
+  created_at DateTime?   @db.Timestamp(0)
+  deleted_at DateTime?   @db.Timestamp(0)
+  blog_posts blog_posts? @relation(fields: [post_id], references: [post_id], onDelete: NoAction, onUpdate: NoAction, map: "blog_comments_ibfk_1")
+  users      users?      @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "blog_comments_ibfk_2")
+
+  @@index([post_id], map: "post_id")
+  @@index([user_id], map: "user_id")
+}
+
+model blog_posts {
+  post_id       Int                @id @default(autoincrement())
+  author_id     Int?
+  title         String?            @db.VarChar(255)
+  content       String?            @db.Text
+  status        blog_posts_status?
+  created_at    DateTime?          @db.Timestamp(0)
+  blog_comments blog_comments[]
+  users         users?             @relation(fields: [author_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "blog_posts_ibfk_1")
+
+  @@index([author_id], map: "author_id")
+}
+
+model comments {
+  comment_id Int       @id @default(autoincrement())
+  scholar_id Int?
+  user_id    Int?
+  content    String?   @db.Text
+  created_at DateTime? @db.Timestamp(0)
+  edited_at  DateTime? @db.Timestamp(0)
+  deleted_at DateTime? @db.Timestamp(0)
+  scholars   scholars? @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "comments_ibfk_1")
+  users      users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "comments_ibfk_2")
+
+  @@index([scholar_id], map: "scholar_id")
+  @@index([user_id], map: "user_id")
+}
+
+model discipline_translations {
+  translation_id Int          @id @default(autoincrement())
+  discipline_id  Int?
+  language_id    Int?
+  name           String?      @db.VarChar(255)
+  disciplines    disciplines? @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "discipline_translations_ibfk_1")
+  languages      languages?   @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "discipline_translations_ibfk_2")
+
+  @@index([discipline_id], map: "discipline_id")
+  @@index([language_id], map: "language_id")
+}
+
+model disciplines {
+  discipline_id           Int                       @id @default(autoincrement())
+  created_at              DateTime?                 @db.Timestamp(0)
+  discipline_translations discipline_translations[]
+  scholar_disciplines     scholar_disciplines[]
+}
+
+model email_verifications {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  token      String   @db.VarChar(255)
+  expires_at DateTime @db.Timestamp(0)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "email_verifications_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model internal_links {
+  link_id           Int               @id @default(autoincrement())
+  source_version_id Int?
+  target_scholar_id Int?
+  scholar_versions  scholar_versions? @relation(fields: [source_version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "internal_links_ibfk_1")
+  scholars          scholars?         @relation(fields: [target_scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "internal_links_ibfk_2")
+
+  @@index([source_version_id], map: "source_version_id")
+  @@index([target_scholar_id], map: "target_scholar_id")
+}
+
+model languages {
+  language_id             Int                       @id @default(autoincrement())
+  code                    String?                   @db.VarChar(255)
+  name                    String?                   @db.VarChar(255)
+  discipline_translations discipline_translations[]
+  scholar_versions        scholar_versions[]
+}
+
+model media {
+  media_id    Int              @id @default(autoincrement())
+  scholar_id  Int?
+  file_name   String?          @db.VarChar(255)
+  file_path   String?          @db.VarChar(255)
+  file_type   media_file_type?
+  status      media_status?
+  uploaded_by Int?
+  uploaded_at DateTime?        @db.Timestamp(0)
+  view_count  Int?
+  like_count  Int?
+  scholars    scholars?        @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
+  users       users?           @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_2")
+
+  @@index([scholar_id], map: "scholar_id")
+  @@index([uploaded_by], map: "uploaded_by")
+}
+
+model notifications {
+  notification_id Int                 @id @default(autoincrement())
+  user_id         Int?
+  type            notifications_type?
+  message         String?             @db.Text
+  related_entity  String?             @db.VarChar(255)
+  is_read         Boolean?
+  created_at      DateTime?           @db.Timestamp(0)
+  users           users?              @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "notifications_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model password_resets {
+  id         Int      @id @default(autoincrement())
+  user_id    Int
+  token      String   @unique(map: "token") @db.VarChar(255)
+  expires_at DateTime @db.Timestamp(0)
+  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "password_resets_ibfk_1")
+
+  @@index([user_id], map: "user_id")
+}
+
+model reports {
+  report_id    Int                   @id @default(autoincrement())
+  reporter_id  Int?
+  content_type reports_content_type?
+  content_id   Int?
+  reason       String?               @db.Text
+  status       String?               @db.VarChar(255)
+  created_at   DateTime?             @db.Timestamp(0)
+  users        users?                @relation(fields: [reporter_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "reports_ibfk_1")
+
+  @@index([reporter_id], map: "reporter_id")
+}
+
+model revisions {
+  revision_id      Int               @id @default(autoincrement())
+  version_id       Int?
+  edited_by        Int?
+  field_changed    String?           @db.VarChar(255)
+  old_value        String?           @db.Text
+  new_value        String?           @db.Text
+  created_at       DateTime?         @db.Timestamp(0)
+  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_1")
+  users            users?            @relation(fields: [edited_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_2")
+
+  @@index([edited_by], map: "edited_by")
+  @@index([version_id], map: "version_id")
+}
+
+model roles {
+  role_id   Int     @id @default(autoincrement())
+  role_name String? @unique(map: "role_name") @db.VarChar(255)
+  users     users[]
+}
+
+model scholar_aliases {
+  alias_id         Int               @id @default(autoincrement())
+  version_id       Int?
+  alias_name       String?           @db.VarChar(255)
+  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_aliases_ibfk_1")
+
+  @@index([version_id], map: "version_id")
+}
+
+model scholar_contributors {
+  scholar_id Int
+  user_id    Int
+  scholars   scholars @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_contributors_ibfk_1")
+  users      users    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_contributors_ibfk_2")
+
+  @@id([scholar_id, user_id])
+  @@index([user_id], map: "user_id")
+}
+
+model scholar_disciplines {
+  scholar_id    Int
+  discipline_id Int
+  disciplines   disciplines @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_1")
+  scholars      scholars    @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_2")
+
+  @@id([scholar_id, discipline_id])
+  @@index([discipline_id], map: "discipline_id")
+}
+
+model scholar_relationships {
+  relation_id                                                 Int                                  @id @default(autoincrement())
+  scholar_id                                                  Int?
+  related_scholar_id                                          Int?
+  relation_type                                               scholar_relationships_relation_type?
+  scholars_scholar_relationships_scholar_idToscholars         scholars?                            @relation("scholar_relationships_scholar_idToscholars", fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_relationships_ibfk_1")
+  scholars_scholar_relationships_related_scholar_idToscholars scholars?                            @relation("scholar_relationships_related_scholar_idToscholars", fields: [related_scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_relationships_ibfk_2")
+
+  @@index([related_scholar_id], map: "related_scholar_id")
+  @@index([scholar_id], map: "scholar_id")
+}
+
+model scholar_versions {
+  version_id          Int                      @id @default(autoincrement())
+  scholar_id          Int?
+  language_id         Int?
+  canonical_name      String?                  @db.VarChar(255)
+  region              String?                  @db.VarChar(255)
+  birth_date_gerogean String?                  @db.VarChar(50)
+  birth_date_hijri    String?                  @db.VarChar(50)
+  death_date_gerogean String?                  @db.VarChar(50)
+  death_date_hijri    String?                  @db.VarChar(50)
+  century_hijri       String?                  @db.VarChar(255)
+  century_gregorian   String?                  @db.VarChar(255)
+  biography           String?                  @db.Text
+  status              scholar_versions_status?
+  created_by          Int?
+  created_at          DateTime?                @db.Timestamp(0)
+  internal_links      internal_links[]
+  revisions           revisions[]
+  scholar_aliases     scholar_aliases[]
+  scholars            scholars?                @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
+  languages           languages?               @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
+  users               users?                   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
+
+  @@index([created_by], map: "created_by")
+  @@index([language_id], map: "language_id")
+  @@index([scholar_id], map: "scholar_id")
+}
+
+model scholars {
+  scholar_id                                                               Int                     @id @default(autoincrement())
+  created_by                                                               Int?
+  created_at                                                               DateTime?               @db.Timestamp(0)
+  bibliography                                                             bibliography[]
+  comments                                                                 comments[]
+  internal_links                                                           internal_links[]
+  media                                                                    media[]
+  scholar_contributors                                                     scholar_contributors[]
+  scholar_disciplines                                                      scholar_disciplines[]
+  scholar_relationships_scholar_relationships_scholar_idToscholars         scholar_relationships[] @relation("scholar_relationships_scholar_idToscholars")
+  scholar_relationships_scholar_relationships_related_scholar_idToscholars scholar_relationships[] @relation("scholar_relationships_related_scholar_idToscholars")
+  scholar_versions                                                         scholar_versions[]
+  users                                                                    users?                  @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholars_ibfk_1")
+
+  @@index([created_by], map: "created_by")
+}
+
+model users {
+  id                   Int                    @id @default(autoincrement())
+  username             String?                @unique(map: "username") @db.VarChar(255)
+  email                String?                @unique(map: "email") @db.VarChar(255)
+  password_hash        String?                @db.VarChar(255)
+  role_id              Int?                   @default(3)
+  is_banned            Boolean?               @default(false)
+  created_at           DateTime?              @db.Timestamp(0)
+  email_verified       Boolean                @default(false)
+  bibliography         bibliography[]
+  blog_comments        blog_comments[]
+  blog_posts           blog_posts[]
+  comments             comments[]
+  email_verifications  email_verifications[]
+  media                media[]
+  notifications        notifications[]
+  password_resets      password_resets[]
+  reports              reports[]
+  revisions            revisions[]
+  scholar_contributors scholar_contributors[]
+  scholar_versions     scholar_versions[]
+  scholars             scholars[]
+  roles                roles?                 @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction, map: "users_ibfk_1")
+
+  @@index([role_id], map: "role_id")
+}
+
+enum notifications_type {
+  NEW_SCHOLAR_SUBMISSION
+  EDIT_PROPOSAL
+  REPORT_SUBMITTED
+  COMMENT_ON_BLOG
+  COMMENT_ON_SCHOLAR
+  SCHOLAR_APPROVED
+  SCHOLAR_REJECTED
+}
+
+enum reports_content_type {
+  scholar
+  comment
+  blog_post
+  blog_comment
+}
+
+enum scholar_relationships_relation_type {
+  teacher
+  student
+}
+
+enum blog_posts_status {
+  draft
+  published
+}
+
+enum media_file_type {
+  pdf
+  audio
+  video
+}
+
+enum media_status {
+  pending
+  approved
+}
+
+enum scholar_versions_status {
+  pending
+  approved
+  rejected
+}
