@@ -10,9 +10,10 @@ const app = express();
 
 // MIDDELEWARES 
 // CORS configuration to allow requests from the frontend
-app.use(cors({
-  origin: "http://localhost:5173", // أو port تاع React
-  credentials: true}));
+ app.use(cors({
+  origin: process.env.FRONTEND_URL || "http://localhost:5173",
+  credentials: true
+}));
 app.use(express.json())
 app.use(cookieParser()); // ← add this
 
