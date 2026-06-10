@@ -1,55 +1,42 @@
-const db = require("../config/db");
+const prisma = require("../config/db");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
-const { sendVerificationEmail ,sendResetPasswordEmail} = require("../service/email.service");
+const { sendVerificationEmail, sendResetPasswordEmail } = require("../service/email.service");
 require("dotenv").config();
 
-
 const cookieOptions = {
-  httpOnly: true,   // JS can't access it
-  secure:process.env.NODE_ENV === "production",     // HTTPS only
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
   sameSite: "strict",
-  maxAge: 24 * 60 * 60 * 1000, // 1 day in ms
+  maxAge: 24 * 60 * 60 * 1000,
 };
-
-
 
 exports.register = async (req, res) => {
   const { username, email, password } = req.body;
-  console.log(username, email, password)
   if (!username || !email || !password)
     return res.status(400).json({ message: "All fields are required" });
 
   try {
-    const [existing] = await db.query(
-      `SELECT  id FROM users WHERE email = ?`,
-      [email]
-    );
-
-    if (existing.length > 0)
+    const existing = await prisma.users.findUnique({ where: { email } });
+    if (existing)
       return res.status(409).json({ message: "Email already in use" });
 
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    const [result] = await db.query(
-      `INSERT INTO users (username, email, password_hash, created_at)
-       VALUES (?, ?, ?, now())`,
-      [username, email, hashedPassword]
-    );
+    const user = await prisma.users.create({
+      data: { username, email, password_hash: hashedPassword, created_at: new Date() }
+    });
 
-      // generate verification token
     const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    await db.query(
-      `INSERT INTO email_verifications (user_id, token, expires_at) VALUES (?, ?, ?)`,
-      [result.insertId, token, expiresAt]
-    );
- 
+    await prisma.email_verifications.create({
+      data: { user_id: user.id, token, expires_at: expiresAt }
+    });
+
     await sendVerificationEmail(email, token);
-
     res.status(201).json({ message: "User created successfully" });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -58,35 +45,22 @@ exports.register = async (req, res) => {
 
 exports.verifyEmail = async (req, res) => {
   const { token } = req.query;
-
-  if (!token)
-    return res.status(400).json({ message: "Token is required" });
+  if (!token) return res.status(400).json({ message: "Token is required" });
 
   try {
-    const [rows] = await db.query(
-      `SELECT * FROM email_verifications WHERE token = ?`,
-      [token]
-    );
-
-    if (rows.length === 0)
+    const verification = await prisma.email_verifications.findFirst({ where: { token } });
+    if (!verification)
       return res.status(400).json({ message: "Invalid token" });
 
-    const verification = rows[0];
-
-    
     if (new Date() > new Date(verification.expires_at))
       return res.status(400).json({ message: "Token has expired, please request a new one" });
- 
-    await db.query(
-      `UPDATE users SET email_verified = true WHERE id = ?`,
-      [verification.user_id]
-    );
 
-     
-    await db.query(
-      `DELETE FROM email_verifications WHERE token = ?`,
-      [token]
-    );
+    await prisma.users.update({
+      where: { id: verification.user_id },
+      data: { email_verified: true }
+    });
+
+    await prisma.email_verifications.delete({ where: { id: verification.id } });
 
     res.json({ message: "Email verified successfully! You can now log in." });
   } catch (error) {
@@ -96,41 +70,24 @@ exports.verifyEmail = async (req, res) => {
 
 exports.resendVerification = async (req, res) => {
   const { email } = req.body;
-
-  if (!email)
-    return res.status(400).json({ message: "Email is required" });
+  if (!email) return res.status(400).json({ message: "Email is required" });
 
   try {
-    const [rows] = await db.query(
-      `SELECT id, email_verified FROM users WHERE email = ?`,
-      [email]
-    );
-
-    if (rows.length === 0)
-      return res.status(404).json({ message: "User not found" });
-
-    if (rows[0].email_verified)
+    const user = await prisma.users.findUnique({ where: { email } });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    if (user.email_verified)
       return res.status(400).json({ message: "Email is already verified" });
 
-    const user = rows[0];
+    await prisma.email_verifications.deleteMany({ where: { user_id: user.id } });
 
-    // delete any existing token
-    await db.query(
-      `DELETE FROM email_verifications WHERE user_id = ?`,
-      [user.id]
-    );
-
-    // generate a new token
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    await db.query(
-      `INSERT INTO email_verifications (user_id, token, expires_at) VALUES (?, ?, ?)`,
-      [user.id, token, expiresAt]
-    );
+    await prisma.email_verifications.create({
+      data: { user_id: user.id, token, expires_at: expiresAt }
+    });
 
     await sendVerificationEmail(email, token);
-
     res.json({ message: "Verification email resent! Please check your inbox." });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
@@ -139,121 +96,98 @@ exports.resendVerification = async (req, res) => {
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;
-
   if (!email || !password)
     return res.status(400).json({ message: "Please enter all values" });
-
+  console.log(await prisma.users.findMany());
+ 
   try {
-    const [rows] = await db.query(
-      `SELECT * FROM users WHERE email = ?`,
-      [email]
-    );
+ 
+    const user = await prisma.users.findUnique({ where: { email } });
+    console.log(user)
+    if (!user) return res.status(401).json({ message: "Invalid credentials" });
+    if (user.is_banned) return res.status(403).json({ message: "Your account has been banned" });
+    if (!user.email_verified) return res.status(403).json({ message: "Please verify your email before logging in" });
 
-    if (rows.length === 0)
-      return res.status(401).json({ message: "Invalid credentials" });
-
-    const user = rows[0];
-
-    if (user.is_banned)
-       return res.status(403).json({ message: "Your account has been banned" });
-
-    if (!user.email_verified)
-       return res.status(403).json({ message: "Please verify your email before logging in" });
     const match = await bcrypt.compare(password, user.password_hash);
-
-    if (!match)
-      return res.status(401).json({ message: "Invalid credentials" });
+    if (!match) return res.status(401).json({ message: "Invalid credentials" });
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
-      res.cookie("token", token, cookieOptions);
 
-
-
+    res.cookie("token", token, cookieOptions);
     res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
 
-exports.getme = async (req,res)=>{
-    try {
-      //replace role_id with role
-        const [rows]=await db.query(`SELECT id, username, email, role_id, is_banned, created_at FROM users WHERE id = ?`,[req.user.id]);
-        if (rows.length === 0)
-      return res.status(404).json({ message: "User not found" });
-    return res.json(rows[0]);
-    } catch (error) {
-        
-    }
-}
+exports.getme = async (req, res) => {
+  try {
+    const user = await prisma.users.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, username: true, email: true, role_id: true, is_banned: true, created_at: true }
+    });
+    if (!user) return res.status(404).json({ message: "User not found" });
+    return res.json(user);
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
 
 exports.logout = (req, res) => {
   res.clearCookie("token", cookieOptions);
   res.json({ message: "Logged out successfully" });
 };
 
-exports.forgotPassword = async (req,res) => {
-  
-  const {email} = req.body;
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email is required" });
 
   try {
-    const [rows] = await db.query(`SELECT id from users where email = ?`,[email])
-     if(rows.length===0) return res.status(404).json({message:"User not found"});
+    const user = await prisma.users.findUnique({ where: { email } });
+    if (!user) return res.status(404).json({ message: "User not found" });
 
-     const user = rows[0];
-     const token = crypto.randomBytes(32).toString("hex");
-     const expiresAt = new Date(Date.now()+60*60*1000);
-     await db.query(
-      `INSERT INTO password_resets (user_id,token,expires_at) VALUES (?,?,?)`,
-     [user.id,token,expiresAt]);
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 
-    
-     await sendResetPasswordEmail(email,token)
-  
-     res.json({ message: "Password reset email sent. Check your inbox." });
-  
-  
-  
+    await prisma.password_resets.create({
+      data: { user_id: user.id, token, expires_at: expiresAt }
+    });
+
+    await sendResetPasswordEmail(email, token);
+    res.json({ message: "Password reset email sent. Check your inbox." });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
-}
+};
 
-exports.resetPassword = async (req,res) =>{
+exports.resetPassword = async (req, res) => {
   const { token } = req.query;
-  if(!token )
-    return res.status(400).json({ message: "Token required" });
- 
-  const {newPassword} = req.body;
-  if(!newPassword)
-    return res.status(400).json({ message: "new password required" });
-try {
-  const [rows] = await db.query(`SELECT * FROM password_resets where token =?`,[token]);
- 
- if (rows.length === 0)
-     return res.status(400).json({ message: "Invalid token" });
- 
- const reset = rows[0];
-    if (new Date() > new Date(reset.expires_at)) return res.status(400).json({ message: "Token expired" });
+  if (!token) return res.status(400).json({ message: "Token required" });
 
+  const { newPassword } = req.body;
+  if (!newPassword) return res.status(400).json({ message: "New password required" });
 
-  const salt = await bcrypt.genSalt(12);
-  const hashedPassword = await bcrypt.hash(newPassword, salt);
- 
- 
-  await db.query(`UPDATE users SET password_hash = ? WHERE id = ?`, [hashedPassword, reset.user_id]);
+  try {
+    const reset = await prisma.password_resets.findUnique({ where: { token } });
+    if (!reset) return res.status(400).json({ message: "Invalid token" });
+    if (new Date() > new Date(reset.expires_at))
+      return res.status(400).json({ message: "Token expired" });
 
-    await db.query(`DELETE FROM password_resets WHERE token = ?`, [token]);
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
 
-     res.json({ message: "Password has been reset successfully." });
- 
-} catch (error) {
-   res.status(500).json({ message: "Server error", error: error.message });
+    await prisma.users.update({
+      where: { id: reset.user_id },
+      data: { password_hash: hashedPassword }
+    });
 
-}
-}
+    await prisma.password_resets.delete({ where: { token } });
+    res.json({ message: "Password has been reset successfully." });
+  } catch (error) {
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
