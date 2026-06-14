@@ -21,7 +21,8 @@ app.use(cookieParser()); // ← add this
 // ROUTES
 app.use('/api/auth',require("./routes/auth.route"));
 app.use("/api/admin",require("./routes/admin.route"));
-
+app.use("/api/scholars",require("./routes/scholar.route")) 
+app.use("/api/media",require("./routes/media.route"));
  
 //ERROR MIDDLEWARES 
 
