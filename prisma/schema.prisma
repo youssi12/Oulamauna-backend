@@ -337,6 +337,7 @@ enum media_file_type {
 enum media_status {
   pending
   approved
+  rejected 
 }
 
 enum scholar_versions_status {
