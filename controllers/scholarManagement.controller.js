@@ -1,35 +1,100 @@
 const prisma = require("../config/db");
 
-exports.getPendingscholars = async (req,res) =>{
+// exports.getPendingscholars = async (req,res) =>{
+//     try {
+//         const pending = await prisma.scholar_versions.findMany({
+//             where:{status:"pending"},
+//             include:{
+//                 scholars:true,
+//                 users:{select:{
+//                     id:true,username:true,email:true
+//                 }},
+//                 languages:true,
+//                 scholar_aliases:true
+//             },
+//             orderBy:{created_at:"asc"}
+//         })
+
+
+//          res.json({ success: true, data: pending });
+
+
+
+
+
+
+
+
+//     } catch (error) {
+//             console.error("getPendingScholars error:", error);
+//     res.status(500).json({ success: false, message: "Server error" });
+//     }
+// }
+
+exports.getPendingCreatedScholars = async (req, res) => {
     try {
         const pending = await prisma.scholar_versions.findMany({
-            where:{status:"pending"},
-            include:{
-                scholars:true,
-                users:{select:{
-                    id:true,username:true,email:true
+            where: { status: "pending", version_type: "creation" },
+            include: {
+                scholars: true,
+                users: { select: {
+                    id: true, username: true, email: true
                 }},
-                languages:true,
-                scholar_aliases:true
+                languages: true,
+                scholar_aliases: true
             },
-            orderBy:{created_at:"asc"}
+            orderBy: { created_at: "asc" }
         })
-
-
-         res.json({ success: true, data: pending });
-
-
-
-
-
-
-
-
+ 
+        res.json({ success: true, data: pending });
+ 
     } catch (error) {
-            console.error("getPendingScholars error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+        console.error("getPendingCreatedScholars error:", error);
+        res.status(500).json({ success: false, message: "Server error" });
     }
 }
+ 
+exports.getPendingEditedScholars = async (req, res) => {
+  try {
+    const pending = await prisma.scholar_versions.findMany({
+      where: { status: "pending", version_type: "edition" },
+      include: {
+        scholars: true,
+        users: { select: { id: true, username: true, email: true } },
+        languages: true,
+        scholar_aliases: true,
+        revisions: true  // this has old_value/new_value per field — perfect for the diff view
+      },
+      orderBy: { created_at: "asc" }
+    });
+
+    // For each pending edit, also fetch the current approved version
+    const result = await Promise.all(
+      pending.map(async (version) => {
+        const currentApproved = await prisma.scholar_versions.findFirst({
+          where: {
+            scholar_id: version.scholar_id,
+            status: "approved",
+          },
+          include: { scholar_aliases: true },
+          orderBy: { created_at: "desc" }
+        });
+
+        return {
+          proposed: version,
+          current: currentApproved  // frontend uses this for the left (original) column
+        };
+      })
+    );
+
+    res.json({ success: true, data: result });
+
+  } catch (error) {
+    console.error("getPendingEditedScholars error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 
 exports.approveScholar = async (req, res) => {
   const versionId = parseInt(req.params.id);
@@ -155,6 +220,8 @@ exports.rejectScholar = async (req, res) => {
 };
 ;
 
+
+// get all scholars versions [in a langauge] (this is for admin  )
 exports.getScholarVersions = async (req, res) => {
   const scholarId = parseInt(req.params.id);
   const { lang } = req.query; // optional: ?lang=ar or ?lang=en
@@ -195,6 +262,95 @@ exports.getScholarVersions = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+
+// Toggle contribute permission (admin only)
+exports.toggleContributePermission = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const user = await prisma.users.findUnique({ where: { id: parseInt(id) } });
+    if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+    const updated = await prisma.users.update({
+      where: { id: parseInt(id) },
+      data: { allowed_to_contribute: !user.allowed_to_contribute }
+    });
+
+    res.json({
+      success: true,
+      message: `User ${updated.allowed_to_contribute ? "can now" : "can no longer"} contribute`,
+      allowed_to_contribute: updated.allowed_to_contribute
+    });
+  } catch (error) {
+    console.error("toggleContributePermission error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+// Dashboard stats
+exports.getDashboardStats = async (req, res) => {
+  try {
+    const now = new Date();
+    const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const [
+      totalPending,
+      overdue,
+      newToday,
+      thisWeek
+    ] = await Promise.all([
+      // Total pending (creation + edition)
+      prisma.scholar_versions.count({
+        where: { status: "pending" }
+      }),
+
+      // Overdue: pending for more than 3 days
+      prisma.scholar_versions.count({
+        where: {
+          status: "pending",
+          created_at: { lt: threeDaysAgo }
+        }
+      }),
+
+      // New today
+      prisma.scholar_versions.count({
+        where: {
+          status: "pending",
+          created_at: { gte: startOfToday }
+        }
+      }),
+
+      // This week: approved/rejected this week (reviewed)
+      prisma.scholar_versions.count({
+        where: {
+          status: { in: ["approved", "rejected"] },
+          created_at: { gte: startOfWeek }
+        }
+      })
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        total_pending: totalPending,
+        overdue,
+        new_today: newToday,
+        this_week: thisWeek
+      }
+    });
+
+  } catch (error) {
+    console.error("getDashboardStats error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 
 
 // can he delete a scholar

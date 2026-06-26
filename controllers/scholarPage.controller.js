@@ -1,7 +1,9 @@
+const { json } = require("express");
 const prisma = require("../config/db");
 
 
 exports.createScholar = async (req, res) => {
+
   const {
     scholar_id,        // optional — if provided, links to existing scholar
     canonical_name,
@@ -19,6 +21,12 @@ exports.createScholar = async (req, res) => {
   } = req.body;
 
   const userId = req.user.id;
+   
+    const user = await prisma.users.findUnique({ where: { id: userId } });
+     if (!user.allowed_to_contribute) {
+       return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
+     }
+
 
   if (!canonical_name || !biography) {
     return res.status(400).json({
@@ -84,6 +92,7 @@ exports.createScholar = async (req, res) => {
         century_hijri: century_hijri || null,
         century_gregorian: century_gregorian || null,
         biography,
+        version_type: "creation", 
         status: "pending",
         created_by: userId,
         created_at: new Date(),
@@ -308,6 +317,11 @@ exports.editScholar = async (req, res) => {
     changed_fields, // array like ["biography", "region"] — for revision tracking
   } = req.body;
 
+     const user = await prisma.users.findUnique({ where: { id: userId } });
+       if (!user.allowed_to_contribute) {
+        return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
+      }
+
   try {
     const scholar = await prisma.scholars.findUnique({
       where: { scholar_id: scholarId },
@@ -337,6 +351,7 @@ exports.editScholar = async (req, res) => {
         century_hijri: century_hijri || null,
         century_gregorian: century_gregorian || null,
         biography,
+        version_type: "edition",  
         status: "pending",
         created_by: userId,
         created_at: new Date(),

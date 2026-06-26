@@ -166,20 +166,20 @@ model reports {
   @@index([reporter_id], map: "reporter_id")
 }
 
-model revisions {
-  revision_id      Int               @id @default(autoincrement())
-  version_id       Int?
-  edited_by        Int?
-  field_changed    String?           @db.VarChar(255)
-  old_value        String?           @db.Text
-  new_value        String?           @db.Text
-  created_at       DateTime?         @db.Timestamp(0)
-  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_1")
-  users            users?            @relation(fields: [edited_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_2")
+// model revisions {
+// revision_id      Int               @id @default(autoincrement())
+//  version_id       Int?
+//  edited_by        Int?
+//  field_changed    String?           @db.VarChar(255)
+//  old_value        String?           @db.Text
+//  new_value        String?           @db.Text
+//  created_at       DateTime?         @db.Timestamp(0)
+//  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_1")
+// users            users?            @relation(fields: [edited_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_2")
 
-  @@index([edited_by], map: "edited_by")
-  @@index([version_id], map: "version_id")
-}
+//  @@index([edited_by], map: "edited_by")
+//  @@index([version_id], map: "version_id")
+// }
 
 model roles {
   role_id   Int     @id @default(autoincrement())
@@ -245,7 +245,8 @@ model scholar_versions {
   created_by          Int?
   created_at          DateTime?                @db.Timestamp(0)
   internal_links      internal_links[]
-  revisions           revisions[]
+ // revisions           revisions[]
+  version_type  scholar_versions_type @default(creation)
   scholar_aliases     scholar_aliases[]
   scholars            scholars?                @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
   languages           languages?               @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
@@ -292,7 +293,8 @@ model users {
   notifications        notifications[]
   password_resets      password_resets[]
   reports              reports[]
-  revisions            revisions[]
+  allowed_to_contribute Boolean  @default(true) 
+ // revisions            revisions[]
   scholar_contributors scholar_contributors[]
   scholar_versions     scholar_versions[]
   scholars             scholars[]
@@ -344,4 +346,10 @@ enum scholar_versions_status {
   pending
   approved
   rejected
+}
+
+ 
+ enum scholar_versions_type {
+  creation
+  edition
 }
