@@ -41,7 +41,8 @@ exports.getPendingCreatedScholars = async (req, res) => {
                     id: true, username: true, email: true
                 }},
                 languages: true,
-                scholar_aliases: true
+                scholar_aliases: true,
+                scholar_references: true,
             },
             orderBy: { created_at: "asc" }
         })
@@ -63,7 +64,7 @@ exports.getPendingEditedScholars = async (req, res) => {
         users: { select: { id: true, username: true, email: true } },
         languages: true,
         scholar_aliases: true,
-        revisions: true  // this has old_value/new_value per field — perfect for the diff view
+        scholar_references: true, 
       },
       orderBy: { created_at: "asc" }
     });
@@ -71,14 +72,21 @@ exports.getPendingEditedScholars = async (req, res) => {
     // For each pending edit, also fetch the current approved version
     const result = await Promise.all(
       pending.map(async (version) => {
-        const currentApproved = await prisma.scholar_versions.findFirst({
-          where: {
-            scholar_id: version.scholar_id,
-            status: "approved",
-          },
-          include: { scholar_aliases: true },
-          orderBy: { created_at: "desc" }
-        });
+         const currentApproved = await prisma.scholar_versions.findFirst({
+              where: {
+                scholar_id: version.scholar_id,
+                language_id: version.language_id,
+                status: "approved",
+              },
+              include: {
+                scholar_aliases: true,
+                    scholar_references: true,
+
+              },
+              orderBy: {
+                created_at: "desc",
+              },
+            });
 
         return {
           proposed: version,
@@ -119,11 +127,23 @@ exports.approveScholar = async (req, res) => {
     }
 
     // 1. Approve version
-    const updated = await prisma.scholar_versions.update({
-      where: { version_id: versionId },
-      data: { status: "approved" },
-    });
-
+      const updated = await prisma.scholar_versions.update({
+  where: { version_id: versionId },
+  data: { status: "approved" },
+  include: {
+    scholar_aliases: true,
+    scholar_references: true,
+    languages: true,
+    users: {
+      select: {
+        id: true,
+        username: true,
+        email: true,
+      },
+    },
+    scholars: true,
+  },
+});
     // 2. Notify user
     if (version.created_by) {
       await prisma.notifications.create({
@@ -247,11 +267,7 @@ exports.getScholarVersions = async (req, res) => {
       include: {
         users: { select: { id: true, username: true } },
         languages: true,
-        revisions: {
-          include: {
-            users: { select: { id: true, username: true } },
-          },
-        },
+        
       },
       orderBy: { created_at: "desc" },
     });
@@ -354,3 +370,6 @@ exports.getDashboardStats = async (req, res) => {
 
 
 // can he delete a scholar
+
+// Keep all approved versions for history.
+// Always display only the latest approved version.

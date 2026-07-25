@@ -68,14 +68,27 @@ const approveMedia = async (req, res) => {
       data: { status: "approved" },
     });
 
+    // Notify the contributor
+    if (media.uploaded_by) {
+      await prisma.notifications.create({
+        data: {
+          user_id: media.uploaded_by,
+          type: "MEDIA_APPROVED",
+          message: `Your media "${media.file_name}" has been approved.`,
+          related_entity: `media:${mediaId}`,
+          is_read: false,
+          created_at: new Date(),
+        },
+      });
+    }
+
     res.json({ success: true, message: "Media approved", data: updated });
   } catch (error) {
+    console.error("approveMedia error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
-
- 
 const rejectMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
   const { reason } = req.body;
@@ -91,24 +104,28 @@ const rejectMedia = async (req, res) => {
       return res.status(400).json({ success: false, message: "Media is not pending" });
     }
 
-    // Update status in DB — keep record for traceability
+    const resourceTypeMap = {
+      pdf: "raw",
+      audio: "video",
+      video: "video",
+    };
+    const resource_type = resourceTypeMap[media.file_type] || "raw";
+
+    const urlParts = media.file_path.split("/");
+    const publicIdWithExt = urlParts.slice(-2).join("/");
+    const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
+    await cloudinary.uploader.destroy(public_id, { resource_type });
+
     const updated = await prisma.media.update({
       where: { media_id: mediaId },
       data: { status: "rejected" },
     });
 
-    // Remove from Cloudinary — no point keeping it there
-    const urlParts = media.file_path.split("/");
-    const publicIdWithExt = urlParts.slice(-2).join("/");
-    const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
-    await cloudinary.uploader.destroy(public_id, { resource_type: "auto" });
-
-    // Notify contributor
     if (media.uploaded_by) {
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,
-          type: "REPORT_SUBMITTED", // closest type you have
+          type: "MEDIA_REJECTED",
           message: `Your media "${media.file_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
           related_entity: `media:${mediaId}`,
           is_read: false,
@@ -119,9 +136,11 @@ const rejectMedia = async (req, res) => {
 
     res.json({ success: true, message: "Media rejected", data: updated });
   } catch (error) {
+    console.error("rejectMedia error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
 const deleteMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
 

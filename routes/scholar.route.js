@@ -11,7 +11,7 @@ const scholarPage= require("../controllers/scholarPage.controller");
 
 // routes
    router.post("/",scholarPage.createScholar)
-   router.get("/",scholarPage.getPublishedScholars);
+   router.get("/",scholarPage.getPublishedScholars);//alwyas give it langugae 
    router.get("/my-submissions",scholarPage.getMySubmissions);
    router.get("/:id", scholarPage.getScholarById); 
    router.put("/:id", scholarPage.editScholar)

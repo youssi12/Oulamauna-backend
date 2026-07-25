@@ -3,10 +3,9 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-    "postinstall": "prisma generate", 
-    "build": "npx prisma migrate deploy",
-    "start": "node app.js",
-    "dev": "npx prisma db push && nodemon app.js"
+  
+    "start":"node app.js",
+    "dev": "nodemon app.js"
   },
   "keywords": [],
   "author": "",
@@ -32,3 +31,4 @@
     "nodemon": "^3.0.0"
   }
 }
+ 

@@ -251,11 +251,27 @@ model scholar_versions {
   scholars            scholars?                @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
   languages           languages?               @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
   users               users?                   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
+  scholar_references scholar_references[]
 
   @@index([created_by], map: "created_by")
   @@index([language_id], map: "language_id")
   @@index([scholar_id], map: "scholar_id")
+   
 }
+
+ model scholar_references {
+  reference_id Int @id @default(autoincrement())
+  version_id   Int
+
+  title        String? @db.VarChar(255)
+  citation     String? @db.Text
+  url          String? @db.VarChar(500)
+
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
+
+  @@index([version_id])
+}
+
 
 model scholars {
   scholar_id                                                               Int                     @id @default(autoincrement())
@@ -311,6 +327,8 @@ enum notifications_type {
   COMMENT_ON_SCHOLAR
   SCHOLAR_APPROVED
   SCHOLAR_REJECTED
+   MEDIA_APPROVED
+  MEDIA_REJECTED
 }
 
 enum reports_content_type {

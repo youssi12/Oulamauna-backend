@@ -4,6 +4,7 @@ module.exports = (req, res, next) => {
     const token = req.cookies.token;
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log("Decoded JWT:", decoded);
     req.user = decoded;  
     next();
   } catch (err) {
