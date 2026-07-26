@@ -105,12 +105,21 @@ exports.login = async (req, res) => {
     const user = await prisma.users.findUnique({ where: { email } });
     console.log(user)
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
-    if (user.is_banned) return res.status(403).json({ message: "Your account has been banned" });
-    if (!user.email_verified) return res.status(403).json({ message: "Please verify your email before logging in" });
 
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match) return res.status(401).json({ message: "Invalid credentials" });
+if (user.is_banned)
+  return res.status(403).json({ message: "Your account has been banned" });
 
+const match = await bcrypt.compare(password, user.password_hash);
+
+if (!match)
+  return res.status(401).json({ message: "Invalid credentials" });
+
+if (!user.email_verified)
+  return res.status(403).json({
+    message: "Please verify your email before logging in",
+    code: "EMAIL_NOT_VERIFIED",
+    email: user.email
+  });
     const token = jwt.sign(
       { id: user.id, email: user.email, role_id: user.role_id },
       process.env.JWT_SECRET,
