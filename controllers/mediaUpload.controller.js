@@ -3,52 +3,126 @@ const { cloudinary } = require("../config/cloudinary");
 const prisma = require("../config/db");
 
  
-const uploadMedia = async (req, res) => {
-  const { scholar_id } = req.body;
+ const uploadMedia = async (req, res) => {
+  const {
+    scholar_id,
+    media_url,
+    title, 
+    year,
+    description,
+  } = req.body;
+
   const userId = req.user.id;
   const file = req.file;
 
-  if (!file) return res.status(400).json({ success: false, message: "No file provided" });
-  if (!scholar_id) return res.status(400).json({ success: false, message: "scholar_id is required" });
+  if (!scholar_id) {
+    return res.status(400).json({
+      success: false,
+      message: "scholar_id is required",
+    });
+  }
+
+  // Must provide either a file or a URL
+  if (!file && !media_url) {
+    return res.status(400).json({
+      success: false,
+      message: "Provide either a file or a media_url",
+    });
+  }
+
+  // Cannot provide both
+  if (file && media_url) {
+    return res.status(400).json({
+      success: false,
+      message: "Upload a file OR provide a media_url, not both",
+    });
+  }
 
   try {
     const scholar = await prisma.scholars.findUnique({
-      where: { scholar_id: parseInt(scholar_id) },
-    });
-
-    if (!scholar) {
-      return res.status(404).json({ success: false, message: "Scholar not found" });
-    }
-
-    const typeMap = {
-      "application/pdf": "pdf",
-      "audio/mpeg": "audio",
-      "audio/wav": "audio",
-      "audio/ogg": "audio",
-      "video/mp4": "video",
-      "video/webm": "video",
-    };
-
-    const file_type = typeMap[file.mimetype] || "pdf";
-
-    const media = await prisma.media.create({
-      data: {
+      where: {
         scholar_id: parseInt(scholar_id),
-        file_name: file.originalname,
-        file_path: file.path,
-        file_type,
-        status: "pending",
-        uploaded_by: userId,
-        uploaded_at: new Date(),
-        view_count: 0,
-        like_count: 0,
       },
     });
 
-    res.status(201).json({ success: true, data: media });
+    if (!scholar) {
+      return res.status(404).json({
+        success: false,
+        message: "Scholar not found",
+      });
+    }
+
+    let mediaData = {
+      scholar_id: parseInt(scholar_id),
+      title: title || null,
+      year: year ? parseInt(year) : null,
+      description: description || null,
+
+      status: "pending",
+      uploaded_by: userId,
+      uploaded_at: new Date(),
+      view_count: 0,
+      like_count: 0,
+    };
+
+    // Uploaded file
+    if (file) {
+      const typeMap = {
+        "application/pdf": "pdf",
+        "audio/mpeg": "audio",
+        "audio/wav": "audio",
+        "audio/ogg": "audio",
+        "video/mp4": "video",
+        "video/webm": "video",
+      };
+
+      mediaData = {
+        ...mediaData,
+        file_name: file.originalname,
+        file_path: file.path,
+        file_type: typeMap[file.mimetype] || "pdf",
+        source_type: "upload",
+      };
+    }
+
+    // External link
+    else {
+      let file_type = "video";
+
+      const lower = media_url.toLowerCase();
+
+      if (lower.endsWith(".pdf")) {
+        file_type = "pdf";
+      } else if (
+        lower.endsWith(".mp3") ||
+        lower.endsWith(".wav") ||
+        lower.endsWith(".ogg")
+      ) {
+        file_type = "audio";
+      }
+
+      mediaData = {
+        ...mediaData,
+        media_url,
+        file_type,
+        source_type: "external",
+      };
+    }
+
+    const media = await prisma.media.create({
+      data: mediaData,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: media,
+    });
   } catch (error) {
     console.error("uploadMedia error:", error);
-    res.status(500).json({ success: false, message: "Upload failed" });
+    res.status(500).json({
+      success: false,
+      message: "Upload failed",
+    });
   }
 };
 

@@ -185,12 +185,25 @@ exports.createScholar = async (req, res) => {
   }
 };
 
+// check if the feild nme corretc 
+// do A-z and Z-a 
+// do tehy suprot languges?
+// veyt contrbbuion only on apporved
+
 exports.getPublishedScholars = async (req, res) => {
-  const lang = req.query.lang || "ar";
+  const {
+    lang = "ar",
+    region,
+    century,
+    discipline,
+  } = req.query;
 
   try {
+    // Find requested language
     const language = await prisma.languages.findFirst({
-      where: { code: lang },
+      where: {
+        code: lang,
+      },
     });
 
     if (!language) {
@@ -200,21 +213,64 @@ exports.getPublishedScholars = async (req, res) => {
       });
     }
 
-    const scholars = await prisma.scholars.findMany({
-      where: {
-        scholar_versions: {
-          some: {
-            status: "approved",
-            language_id: language.language_id,
+    // ----------------------------
+    // Build scholar_versions filter
+    // ----------------------------
+
+    const versionWhere = {
+      status: "approved",
+      language_id: language.language_id,
+    };
+
+    if (region) {
+      versionWhere.region = {
+        in: region.split(","),
+      };
+    }
+
+    if (century) {
+      versionWhere.century_gregorian = {
+        in: century.split(","),
+      };
+
+      // If you prefer Hijri centuries instead:
+      // versionWhere.century_hijri = {
+      //   in: century.split(","),
+      // };
+    }
+
+    // ----------------------------
+    // Build scholar filter
+    // ----------------------------
+
+    const scholarWhere = {
+      scholar_versions: {
+        some: versionWhere,
+      },
+    };
+
+    if (discipline) {
+      scholarWhere.scholar_disciplines = {
+        some: {
+          discipline_id: {
+            in: discipline
+              .split(",")
+              .map(Number),
           },
         },
-      },
+      };
+    }
+
+    // ----------------------------
+    // Fetch scholars
+    // ----------------------------
+
+    const scholars = await prisma.scholars.findMany({
+      where: scholarWhere,
+
       include: {
         scholar_versions: {
-          where: {
-            status: "approved",
-            language_id: language.language_id,
-          },
+          where: versionWhere,
           orderBy: {
             created_at: "desc",
           },
@@ -224,6 +280,7 @@ exports.getPublishedScholars = async (req, res) => {
             languages: true,
           },
         },
+
         scholar_disciplines: {
           include: {
             disciplines: {
@@ -236,13 +293,16 @@ exports.getPublishedScholars = async (req, res) => {
       },
     });
 
-    res.json({
+    return res.json({
       success: true,
+      count: scholars.length,
       data: scholars,
     });
+
   } catch (error) {
     console.error("getPublishedScholars error:", error);
-    res.status(500).json({
+
+    return res.status(500).json({
       success: false,
       message: "Server error",
     });
@@ -364,6 +424,14 @@ exports.getScholarById = async (req, res) => {
         reference_id: "asc",
       },
     });
+    const works = await prisma.scholar_works.findMany({
+  where: {
+    version_id: currentVersion.version_id,
+  },
+  orderBy: {
+    year: "desc",
+  },
+});
 
     // Revision history for this scholar in the same language
     const history = await prisma.scholar_versions.findMany({
@@ -402,6 +470,7 @@ exports.getScholarById = async (req, res) => {
         ...scholar,
         references,
         history,
+        works,
         available_languages: availableLanguages.map((v) => v.languages),
       },
     });

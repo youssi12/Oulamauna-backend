@@ -15,7 +15,8 @@ const app = express();
   credentials: true
 }));
 app.use(express.json())
-app.use(cookieParser()); // ← add this
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser()); 
 
 
 // ROUTES
@@ -23,6 +24,7 @@ app.use('/api/auth',require("./routes/auth.route"));
 app.use("/api/admin",require("./routes/admin.route"));
 app.use("/api/scholars",require("./routes/scholar.route")) 
 app.use("/api/media",require("./routes/media.route"));
+app.use("/api/work",require("./routes/works.route"))
  
 //ERROR MIDDLEWARES 
 

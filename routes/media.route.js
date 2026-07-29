@@ -10,8 +10,9 @@ const {uploadMedia,getScholarMedia} = require("../controllers/mediaUpload.contro
 
 
 // routes
-    router.get("/:scholar_id", getScholarMedia);
+    router.get("/:scholar_id", getScholarMedia);  
     router.post("/upload", upload.single("file"), uploadMedia);
+    router.post("/link", uploadMedia);
 
 
 

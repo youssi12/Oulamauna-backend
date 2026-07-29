@@ -117,14 +117,22 @@ model media {
   scholar_id  Int?
   file_name   String?          @db.VarChar(255)
   file_path   String?          @db.VarChar(255)
+  media_url     String?          @db.VarChar(500)
+  source_type   media_source_type @default(upload)
   file_type   media_file_type?
   status      media_status?
   uploaded_by Int?
   uploaded_at DateTime?        @db.Timestamp(0)
-  view_count  Int?
-  like_count  Int?
+  view_count Int @default(0)
+  like_count Int @default(0)
   scholars    scholars?        @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
   users       users?           @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_2")
+  title         String?            @db.VarChar(255)
+ // format        media_format? -->thiis 
+ // author        String?            @db.VarChar(255)  ->this
+ // publisher     String?            @db.VarChar(255)--->this 
+  year          Int?
+  description   String?            @db.Text
 
   @@index([scholar_id], map: "scholar_id")
   @@index([uploaded_by], map: "uploaded_by")
@@ -252,11 +260,11 @@ model scholar_versions {
   languages           languages?               @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
   users               users?                   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
   scholar_references scholar_references[]
+  scholar_works scholar_works[]
 
   @@index([created_by], map: "created_by")
   @@index([language_id], map: "language_id")
-  @@index([scholar_id], map: "scholar_id")
-   
+  @@index([scholar_id], map: "scholar_id") 
 }
 
  model scholar_references {
@@ -331,6 +339,25 @@ enum notifications_type {
   MEDIA_REJECTED
 }
 
+model scholar_works {
+  work_id        Int                @id @default(autoincrement())
+  version_id     Int
+
+  title          String             @db.VarChar(255)
+  year           Int?
+  format         work_format
+  description    String?            @db.Text
+
+  media_url      String?            @db.VarChar(500)
+  file_name      String?            @db.VarChar(255)
+  file_path      String?            @db.VarChar(500)
+  source_type    media_source_type?
+
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
+
+  @@index([version_id])
+}
+
 enum reports_content_type {
   scholar
   comment
@@ -370,4 +397,31 @@ enum scholar_versions_status {
  enum scholar_versions_type {
   creation
   edition
+}
+
+enum media_source_type {
+  upload
+  external
+}
+
+
+ enum work_format {
+  BOOK
+  ARTICLE
+  TREATISE
+  MANUSCRIPT
+  LECTURE
+  SERMON
+  FATWA
+  POEM
+  LETTER
+  COMMENTARY
+  TRANSLATION
+  RESEARCH
+  COURSE
+  DEVICE
+  INVENTION
+  SOFTWARE
+  MAP
+  OTHER
 }
