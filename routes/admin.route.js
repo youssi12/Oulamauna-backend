@@ -4,6 +4,8 @@ const router = express.Router();
 const { getAllUsers, getUserById, banUser, unbanUser } = require("../controllers/user.controller");
 const { approveMedia,rejectMedia,deleteMedia} = require("../controllers/mediaUpload.controller");
 const scholarManagement = require("../controllers/scholarManagement.controller")
+const {updateRegion,deleteRegion,} = require("../controllers/region.controller");
+const {updateDiscipline,deleteDiscipline} = require("../controllers/discipline.controller");
 
 // middlewares 
 const protect = require("../middlewares/auth.middleware");
@@ -32,6 +34,15 @@ const adminOnly = require("../middlewares/admin.middleware");
     router.delete("/media/:id",   deleteMedia);
 
 
+
+//  discipline managemnet
+router.put("/discipline/:id",   updateDiscipline);
+router.delete("/discipline/:id",   deleteDiscipline);
+
+
+// regions management
+router.put("/region/:id",  updateRegion);
+router.delete("/region/:id", deleteRegion);
 // refrences 
  
 module.exports = router;

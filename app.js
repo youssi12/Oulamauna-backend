@@ -25,7 +25,10 @@ app.use("/api/admin",require("./routes/admin.route"));
 app.use("/api/scholars",require("./routes/scholar.route")) 
 app.use("/api/media",require("./routes/media.route"));
 app.use("/api/work",require("./routes/works.route"))
- 
+app.use("/api/img",require("./routes/scholarImage.route"))
+app.use("/api/discipline",require("./routes/discipline.route"))
+app.use("/api/region",require("./routes/regions.route"))
+app.use("/api/date",require("./routes/dates.route"))
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {

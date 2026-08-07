@@ -1,36 +1,5 @@
 const prisma = require("../config/db");
 
-// exports.getPendingscholars = async (req,res) =>{
-//     try {
-//         const pending = await prisma.scholar_versions.findMany({
-//             where:{status:"pending"},
-//             include:{
-//                 scholars:true,
-//                 users:{select:{
-//                     id:true,username:true,email:true
-//                 }},
-//                 languages:true,
-//                 scholar_aliases:true
-//             },
-//             orderBy:{created_at:"asc"}
-//         })
-
-
-//          res.json({ success: true, data: pending });
-
-
-
-
-
-
-
-
-//     } catch (error) {
-//             console.error("getPendingScholars error:", error);
-//     res.status(500).json({ success: false, message: "Server error" });
-//     }
-// }
-
 exports.getPendingCreatedScholars = async (req, res) => {
     try {
         const pending = await prisma.scholar_versions.findMany({
@@ -43,6 +12,8 @@ exports.getPendingCreatedScholars = async (req, res) => {
                 languages: true,
                 scholar_aliases: true,
                 scholar_references: true,
+                regions: true,        // ← added
+                scholar_dates: true,  // ← added
             },
             orderBy: { created_at: "asc" }
         })
@@ -64,7 +35,9 @@ exports.getPendingEditedScholars = async (req, res) => {
         users: { select: { id: true, username: true, email: true } },
         languages: true,
         scholar_aliases: true,
-        scholar_references: true, 
+        scholar_references: true,
+        regions: true,        // ← added
+        scholar_dates: true,  // ← added
       },
       orderBy: { created_at: "asc" }
     });
@@ -80,8 +53,9 @@ exports.getPendingEditedScholars = async (req, res) => {
               },
               include: {
                 scholar_aliases: true,
-                    scholar_references: true,
-
+                scholar_references: true,
+                regions: true,        // ← added — needed to diff old vs proposed region
+                scholar_dates: true,  // ← added — needed to diff old vs proposed dates
               },
               orderBy: {
                 created_at: "desc",
@@ -134,6 +108,8 @@ exports.approveScholar = async (req, res) => {
     scholar_aliases: true,
     scholar_references: true,
     languages: true,
+    regions: true,        // ← added
+    scholar_dates: true,  // ← added
     users: {
       select: {
         id: true,
@@ -238,7 +214,6 @@ exports.rejectScholar = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-;
 
 
 // get all scholars versions [in a langauge] (this is for admin  )
@@ -267,7 +242,8 @@ exports.getScholarVersions = async (req, res) => {
       include: {
         users: { select: { id: true, username: true } },
         languages: true,
-        
+        regions: true,        // ← added
+        scholar_dates: true,  // ← added
       },
       orderBy: { created_at: "desc" },
     });
@@ -366,10 +342,3 @@ exports.getDashboardStats = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
-
-
-
-// can he delete a scholar
-
-// Keep all approved versions for history.
-// Always display only the latest approved version.

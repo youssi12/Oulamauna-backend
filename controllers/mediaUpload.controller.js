@@ -1,13 +1,15 @@
-// mediaUpload.controller.js
 const { cloudinary } = require("../config/cloudinary");
 const prisma = require("../config/db");
 
- 
- const uploadMedia = async (req, res) => {
+// ======================================================
+// Upload Media
+// ======================================================
+
+const uploadMedia = async (req, res) => {
   const {
-    scholar_id,
+    version_id,
     media_url,
-    title, 
+    title,
     year,
     description,
   } = req.body;
@@ -15,14 +17,13 @@ const prisma = require("../config/db");
   const userId = req.user.id;
   const file = req.file;
 
-  if (!scholar_id) {
+  if (!version_id) {
     return res.status(400).json({
       success: false,
-      message: "scholar_id is required",
+      message: "version_id is required",
     });
   }
 
-  // Must provide either a file or a URL
   if (!file && !media_url) {
     return res.status(400).json({
       success: false,
@@ -30,7 +31,6 @@ const prisma = require("../config/db");
     });
   }
 
-  // Cannot provide both
   if (file && media_url) {
     return res.status(400).json({
       success: false,
@@ -39,21 +39,21 @@ const prisma = require("../config/db");
   }
 
   try {
-    const scholar = await prisma.scholars.findUnique({
+    const version = await prisma.scholar_versions.findUnique({
       where: {
-        scholar_id: parseInt(scholar_id),
+        version_id: parseInt(version_id),
       },
     });
 
-    if (!scholar) {
+    if (!version) {
       return res.status(404).json({
         success: false,
-        message: "Scholar not found",
+        message: "Scholar version not found",
       });
     }
 
     let mediaData = {
-      scholar_id: parseInt(scholar_id),
+      version_id: parseInt(version_id),
       title: title || null,
       year: year ? parseInt(year) : null,
       description: description || null,
@@ -65,7 +65,6 @@ const prisma = require("../config/db");
       like_count: 0,
     };
 
-    // Uploaded file
     if (file) {
       const typeMap = {
         "application/pdf": "pdf",
@@ -83,10 +82,7 @@ const prisma = require("../config/db");
         file_type: typeMap[file.mimetype] || "pdf",
         source_type: "upload",
       };
-    }
-
-    // External link
-    else {
+    } else {
       let file_type = "video";
 
       const lower = media_url.toLowerCase();
@@ -117,8 +113,10 @@ const prisma = require("../config/db");
       success: true,
       data: media,
     });
+
   } catch (error) {
     console.error("uploadMedia error:", error);
+
     res.status(500).json({
       success: false,
       message: "Upload failed",
@@ -126,29 +124,44 @@ const prisma = require("../config/db");
   }
 };
 
-// Admin approves media
+// ======================================================
+// Approve Media
+// ======================================================
+
 const approveMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
 
   try {
-    const media = await prisma.media.findUnique({ where: { media_id: mediaId } });
+    const media = await prisma.media.findUnique({
+      where: {
+        media_id: mediaId,
+      },
+    });
 
     if (!media) {
-      return res.status(404).json({ success: false, message: "Media not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
     }
 
     const updated = await prisma.media.update({
-      where: { media_id: mediaId },
-      data: { status: "approved" },
+      where: {
+        media_id: mediaId,
+      },
+      data: {
+        status: "approved",
+      },
     });
 
-    // Notify the contributor
     if (media.uploaded_by) {
+      const mediaName = media.title || media.file_name || "media";
+
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,
           type: "MEDIA_APPROVED",
-          message: `Your media "${media.file_name}" has been approved.`,
+          message: `Your media "${mediaName}" has been approved.`,
           related_entity: `media:${mediaId}`,
           is_read: false,
           created_at: new Date(),
@@ -156,51 +169,86 @@ const approveMedia = async (req, res) => {
       });
     }
 
-    res.json({ success: true, message: "Media approved", data: updated });
+    res.json({
+      success: true,
+      message: "Media approved",
+      data: updated,
+    });
+
   } catch (error) {
     console.error("approveMedia error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
+
+// ======================================================
+// Reject Media
+// ======================================================
 
 const rejectMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
   const { reason } = req.body;
 
   try {
-    const media = await prisma.media.findUnique({ where: { media_id: mediaId } });
+    const media = await prisma.media.findUnique({
+      where: {
+        media_id: mediaId,
+      },
+    });
 
     if (!media) {
-      return res.status(404).json({ success: false, message: "Media not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
     }
 
     if (media.status !== "pending") {
-      return res.status(400).json({ success: false, message: "Media is not pending" });
+      return res.status(400).json({
+        success: false,
+        message: "Media is not pending",
+      });
     }
 
-    const resourceTypeMap = {
-      pdf: "raw",
-      audio: "video",
-      video: "video",
-    };
-    const resource_type = resourceTypeMap[media.file_type] || "raw";
+    if (media.file_path) {
+      const resourceTypeMap = {
+        pdf: "raw",
+        audio: "video",
+        video: "video",
+      };
 
-    const urlParts = media.file_path.split("/");
-    const publicIdWithExt = urlParts.slice(-2).join("/");
-    const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
-    await cloudinary.uploader.destroy(public_id, { resource_type });
+      const resource_type = resourceTypeMap[media.file_type] || "raw";
+
+      const urlParts = media.file_path.split("/");
+      const publicIdWithExt = urlParts.slice(-2).join("/");
+      const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
+
+      await cloudinary.uploader.destroy(public_id, {
+        resource_type,
+      });
+    }
 
     const updated = await prisma.media.update({
-      where: { media_id: mediaId },
-      data: { status: "rejected" },
+      where: {
+        media_id: mediaId,
+      },
+      data: {
+        status: "rejected",
+      },
     });
 
     if (media.uploaded_by) {
+      const mediaName = media.title || media.file_name || "media";
+
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,
           type: "MEDIA_REJECTED",
-          message: `Your media "${media.file_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+          message: `Your media "${mediaName}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
           related_entity: `media:${mediaId}`,
           is_read: false,
           created_at: new Date(),
@@ -208,60 +256,119 @@ const rejectMedia = async (req, res) => {
       });
     }
 
-    res.json({ success: true, message: "Media rejected", data: updated });
+    res.json({
+      success: true,
+      message: "Media rejected",
+      data: updated,
+    });
+
   } catch (error) {
     console.error("rejectMedia error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
+
+// ======================================================
+// Delete Media
+// ======================================================
 
 const deleteMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
 
   try {
-    const media = await prisma.media.findUnique({ where: { media_id: mediaId } });
+    const media = await prisma.media.findUnique({
+      where: {
+        media_id: mediaId,
+      },
+    });
 
     if (!media) {
-      return res.status(404).json({ success: false, message: "Media not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
     }
 
-    // ✅ ADD THIS
-    const resourceTypeMap = {
-      pdf: "raw",
-      audio: "video",
-      video: "video",
-    };
-    const resource_type = resourceTypeMap[media.file_type] || "raw";
+    if (media.file_path) {
+      const resourceTypeMap = {
+        pdf: "raw",
+        audio: "video",
+        video: "video",
+      };
 
-    const urlParts = media.file_path.split("/");
-    const publicIdWithExt = urlParts.slice(-2).join("/");
-    const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
+      const resource_type = resourceTypeMap[media.file_type] || "raw";
 
-    await cloudinary.uploader.destroy(public_id, { resource_type }); // ✅ was "auto"
-    await prisma.media.delete({ where: { media_id: mediaId } });
+      const urlParts = media.file_path.split("/");
+      const publicIdWithExt = urlParts.slice(-2).join("/");
+      const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
 
-    res.json({ success: true, message: "Media deleted" });
+      await cloudinary.uploader.destroy(public_id, {
+        resource_type,
+      });
+    }
+
+    await prisma.media.delete({
+      where: {
+        media_id: mediaId,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Media deleted",
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error", error });
+    console.error("deleteMedia error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
- 
+
+// ======================================================
+// Get Approved Media for a Version
+// ======================================================
+
 const getScholarMedia = async (req, res) => {
-  const scholarId = parseInt(req.params.scholar_id);
+  const versionId = parseInt(req.params.version_id);
 
   try {
     const media = await prisma.media.findMany({
       where: {
-        scholar_id: scholarId,
+        version_id: versionId,
         status: "approved",
       },
-      orderBy: { uploaded_at: "desc" },
+      orderBy: {
+        uploaded_at: "desc",
+      },
     });
 
-    res.json({ success: true, data: media });
+    res.json({
+      success: true,
+      data: media,
+    });
+
   } catch (error) {
-    res.status(500).json({ success: false, message: "Server error" });
+    console.error("getScholarMedia error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
 
-module.exports = { uploadMedia, approveMedia, deleteMedia, getScholarMedia ,rejectMedia};
+module.exports = {
+  uploadMedia,
+  approveMedia,
+  rejectMedia,
+  deleteMedia,
+  getScholarMedia,
+};

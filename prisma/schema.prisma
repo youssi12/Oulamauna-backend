@@ -64,23 +64,17 @@ model comments {
   @@index([user_id], map: "user_id")
 }
 
-model discipline_translations {
-  translation_id Int          @id @default(autoincrement())
-  discipline_id  Int?
-  language_id    Int?
-  name           String?      @db.VarChar(255)
-  disciplines    disciplines? @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "discipline_translations_ibfk_1")
-  languages      languages?   @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "discipline_translations_ibfk_2")
+ 
 
-  @@index([discipline_id], map: "discipline_id")
+ model disciplines {
+  discipline_id       Int                   @id @default(autoincrement())
+  name                String                @db.VarChar(255)
+  language_id         Int?
+  created_at          DateTime?             @db.Timestamp(0)
+  languages            languages?            @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "disciplines_ibfk_1")
+  scholar_disciplines scholar_disciplines[]
+
   @@index([language_id], map: "language_id")
-}
-
-model disciplines {
-  discipline_id           Int                       @id @default(autoincrement())
-  created_at              DateTime?                 @db.Timestamp(0)
-  discipline_translations discipline_translations[]
-  scholar_disciplines     scholar_disciplines[]
 }
 
 model email_verifications {
@@ -105,36 +99,42 @@ model internal_links {
 }
 
 model languages {
-  language_id             Int                       @id @default(autoincrement())
-  code                    String?                   @db.VarChar(255)
-  name                    String?                   @db.VarChar(255)
-  discipline_translations discipline_translations[]
-  scholar_versions        scholar_versions[]
+  language_id      Int                 @id @default(autoincrement())
+  code             String?             @db.VarChar(255)
+  name             String?             @db.VarChar(255)
+
+  scholar_versions scholar_versions[]
+  disciplines      disciplines[]
+  regions          regions[]
 }
 
-model media {
-  media_id    Int              @id @default(autoincrement())
-  scholar_id  Int?
-  file_name   String?          @db.VarChar(255)
-  file_path   String?          @db.VarChar(255)
-  media_url     String?          @db.VarChar(500)
-  source_type   media_source_type @default(upload)
-  file_type   media_file_type?
-  status      media_status?
-  uploaded_by Int?
-  uploaded_at DateTime?        @db.Timestamp(0)
-  view_count Int @default(0)
-  like_count Int @default(0)
-  scholars    scholars?        @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
-  users       users?           @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_2")
-  title         String?            @db.VarChar(255)
- // format        media_format? -->thiis 
- // author        String?            @db.VarChar(255)  ->this
- // publisher     String?            @db.VarChar(255)--->this 
-  year          Int?
-  description   String?            @db.Text
+ model media {
+  media_id      Int               @id @default(autoincrement())
 
-  @@index([scholar_id], map: "scholar_id")
+  version_id    Int
+
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
+  file_name     String?           @db.VarChar(255)
+  file_path     String?           @db.VarChar(500)
+  media_url     String?           @db.VarChar(500)
+
+  source_type   media_source_type @default(upload)
+  file_type     media_file_type?
+  status        media_status?
+
+  uploaded_by Int?
+
+users users? @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_2")
+
+  uploaded_at   DateTime?         @db.Timestamp(0)
+  view_count    Int               @default(0)
+  like_count    Int               @default(0)
+
+  title         String?           @db.VarChar(255)
+  year          Int?
+  description   String?           @db.Text
+
+  @@index([version_id], map: "version_id")
   @@index([uploaded_by], map: "uploaded_by")
 }
 
@@ -174,20 +174,7 @@ model reports {
   @@index([reporter_id], map: "reporter_id")
 }
 
-// model revisions {
-// revision_id      Int               @id @default(autoincrement())
-//  version_id       Int?
-//  edited_by        Int?
-//  field_changed    String?           @db.VarChar(255)
-//  old_value        String?           @db.Text
-//  new_value        String?           @db.Text
-//  created_at       DateTime?         @db.Timestamp(0)
-//  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_1")
-// users            users?            @relation(fields: [edited_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "revisions_ibfk_2")
-
-//  @@index([edited_by], map: "edited_by")
-//  @@index([version_id], map: "version_id")
-// }
+ 
 
 model roles {
   role_id   Int     @id @default(autoincrement())
@@ -241,19 +228,20 @@ model scholar_versions {
   scholar_id          Int?
   language_id         Int?
   canonical_name      String?                  @db.VarChar(255)
-  region              String?                  @db.VarChar(255)
-  birth_date_gerogean String?                  @db.VarChar(50)
-  birth_date_hijri    String?                  @db.VarChar(50)
-  death_date_gerogean String?                  @db.VarChar(50)
-  death_date_hijri    String?                  @db.VarChar(50)
-  century_hijri       String?                  @db.VarChar(255)
-  century_gregorian   String?                  @db.VarChar(255)
+   
+  region_id                  Int?                    
+  regions                    regions?                 @relation(fields: [region_id], references: [region_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_4")
+
+   century_hijri_start     Int?
+  century_hijri_end       Int?
+  century_gregorian_start Int?
+  century_gregorian_end   Int?
   biography           String?                  @db.Text
+  image_url           String?                  @db.VarChar(500)
   status              scholar_versions_status?
   created_by          Int?
   created_at          DateTime?                @db.Timestamp(0)
   internal_links      internal_links[]
- // revisions           revisions[]
   version_type  scholar_versions_type @default(creation)
   scholar_aliases     scholar_aliases[]
   scholars            scholars?                @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
@@ -261,11 +249,16 @@ model scholar_versions {
   users               users?                   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
   scholar_references scholar_references[]
   scholar_works scholar_works[]
+  media media[]
+  scholar_dates scholar_dates[]
 
   @@index([created_by], map: "created_by")
   @@index([language_id], map: "language_id")
   @@index([scholar_id], map: "scholar_id") 
+  @@index([region_id], map: "region_id")
 }
+
+
 
  model scholar_references {
   reference_id Int @id @default(autoincrement())
@@ -288,7 +281,7 @@ model scholars {
   bibliography                                                             bibliography[]
   comments                                                                 comments[]
   internal_links                                                           internal_links[]
-  media                                                                    media[]
+  
   scholar_contributors                                                     scholar_contributors[]
   scholar_disciplines                                                      scholar_disciplines[]
   scholar_relationships_scholar_relationships_scholar_idToscholars         scholar_relationships[] @relation("scholar_relationships_scholar_idToscholars")
@@ -327,6 +320,43 @@ model users {
   @@index([role_id], map: "role_id")
 }
 
+ model regions {
+  region_id        Int                @id @default(autoincrement())
+  name             String             @db.VarChar(255)
+  language_id      Int
+  created_at       DateTime?          @db.Timestamp(0)
+
+  language         languages          @relation(fields: [language_id], references: [language_id])
+
+  scholar_versions scholar_versions[]
+}
+
+enum scholar_date_type {
+  birth
+  death
+}
+
+enum calendar_type {
+  hijri
+  gregorian
+}
+
+model scholar_dates {
+  date_id        Int               @id @default(autoincrement())
+  version_id     Int
+  date_type      scholar_date_type
+  calendar       calendar_type
+  year           Int?              // structured year — enables filtering/sorting/century derivation
+  is_approximate Boolean           @default(false) // "circa" flag
+  raw_text       String?           @db.VarChar(100) // fallback display, e.g. "early 4th century" or "disputed"
+
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
+
+  @@unique([version_id, date_type, calendar])
+  @@index([version_id])
+}
+
+
 enum notifications_type {
   NEW_SCHOLAR_SUBMISSION
   EDIT_PROPOSAL
@@ -337,6 +367,8 @@ enum notifications_type {
   SCHOLAR_REJECTED
    MEDIA_APPROVED
   MEDIA_REJECTED
+  NEW_DISCIPLINE_SUBMISSION
+  NEW_REGION_SUBMISSION
 }
 
 model scholar_works {
@@ -357,6 +389,9 @@ model scholar_works {
 
   @@index([version_id])
 }
+
+    
+
 
 enum reports_content_type {
   scholar

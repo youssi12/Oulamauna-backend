@@ -1,56 +1,312 @@
 const prisma = require("../config/db");
+const { uploadScholarImageService } = require("../service/scholarImage.service");
+const { createWorkService } = require("../service/works.service");
+const { uploadMediaService } = require("../service/media.service");
+const { createReferenceService } = require("../service/refrences.service");
+
+
+const WORK_FORMATS = new Set(["BOOK","ARTICLE","TREATISE","MANUSCRIPT","LECTURE","SERMON","FATWA","POEM","LETTER","COMMENTARY","TRANSLATION","RESEARCH","COURSE","DEVICE","INVENTION","SOFTWARE","MAP","OTHER",]);
+const DATE_TYPES = new Set(["birth", "death"]);
+const CALENDARS = new Set(["hijri", "gregorian"]);
+
+
 
 exports.createScholar = async (req, res) => {
+  // ── Parse the JSON payload from the single "data" field ──
+  // req.body.data arrives as a raw JSON string because it's multipart —
+  // everything non-file lives here instead of scattered across req.body.
+  let payload;
+  try {
+    payload = JSON.parse(req.body.data);
+  } catch (err) {
+    return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" });
+  }
+ 
   const {
-    scholar_id,        // optional — if provided, links to existing scholar
+    scholar_id,
     canonical_name,
     aliases,
-    region,
-    birth_date_gregorian,
-    birth_date_hijri,
-    death_date_gregorian,
-    death_date_hijri,
-    century_hijri,
-    century_gregorian,
+    region_id,
+    century_hijri_start,
+    century_hijri_end,
+    century_gregorian_start,
+    century_gregorian_end,
+    dates,
     biography,
     language_id,
     discipline_ids,
     references,
-  } = req.body;
-
+    works, // each item may include a "file_ref" string, e.g. "work_file_0"
+    media, // each item may include a "file_ref" string, e.g. "media_file_0"
+  } = payload;
+ 
   const userId = req.user.id;
+ 
+  // ── Build a fieldname → file lookup from multer.any() ──
+  // Files are matched to array items by "file_ref", not position.
+  const filesByField = {};
+  (req.files || []).forEach((f) => {
+    filesByField[f.fieldname] = f;
+  });
+ 
+  // ===================================================
+  // 1. Required fields
+  // ===================================================
+   if (!canonical_name) {
+  return res.status(400).json({
+    success: false,
+    message: "canonical_name is required",
+  });
+}
 
-  if (!canonical_name || !biography) {
-    return res.status(400).json({
-      success: false,
-      message: "canonical_name and biography are required",
-    });
+if (!biography) {
+  return res.status(400).json({
+    success: false,
+    message: "biography is required",
+  });
+}
+
+if (!language_id) {
+  return res.status(400).json({
+    success: false,
+    message: "language_id is required",
+  });
+}
+ 
+  // ===================================================
+  // Dates — enum + range validation
+  // ===================================================
+  if (dates && dates.length > 0) {
+    for (let i = 0; i < dates.length; i++) {
+      const d = dates[i];
+ 
+      if (!DATE_TYPES.has(d.date_type)) {
+        return res.status(400).json({
+          success: false,
+          message: `Date #${i + 1}: date_type must be one of: ${[...DATE_TYPES].join(", ")}`,
+        });
+      }
+ 
+      if (!CALENDARS.has(d.calendar)) {
+        return res.status(400).json({
+          success: false,
+          message: `Date #${i + 1}: calendar must be one of: ${[...CALENDARS].join(", ")}`,
+        });
+      }
+ 
+      if (d.raw_text != null && String(d.raw_text).length > 100) {
+        return res.status(400).json({
+          success: false,
+          message: `Date #${i + 1}: raw_text must be 100 characters or fewer`,
+        });
+      }
+ 
+      if (d.year == null) continue;
+ 
+      const year = parseInt(d.year, 10);
+ 
+      if (Number.isNaN(year)) {
+        return res.status(400).json({
+          success: false,
+          message: `Date #${i + 1}: year must be a valid number`,
+        });
+      }
+ 
+      if (d.calendar === "gregorian" && (year < 1 || year > 2026)) {
+        return res.status(400).json({
+          success: false,
+          message: "Gregorian year must be between 1 and 2026.",
+        });
+      }
+ 
+      if (d.calendar === "hijri" && (year < 1 || year > 1449)) {
+        return res.status(400).json({
+          success: false,
+          message: "Hijri year must be between 1 and 1449.",
+        });
+      }
+    }
   }
-
+ 
+  // ===================================================
+  // 8. Works — required fields, enum, file/url exclusivity, file_ref existence
+  // ===================================================
+  if (works && works.length > 0) {
+    for (let i = 0; i < works.length; i++) {
+      const w = works[i];
+ 
+      if (!w.title) {
+        return res.status(400).json({
+          success: false,
+          message: `Work #${i + 1}: title is required.`,
+        });
+      }
+ 
+      if (!WORK_FORMATS.has(w.format)) {
+        return res.status(400).json({
+          success: false,
+          message: `Work #${i + 1}: invalid format.`,
+        });
+      }
+ 
+      if (w.file_ref && w.media_url) {
+        return res.status(400).json({
+          success: false,
+          message: `Work #${i + 1}: cannot have both file and media_url.`,
+        });
+      }
+ 
+      if (!w.file_ref && !w.media_url) {
+        return res.status(400).json({
+          success: false,
+          message: `Work #${i + 1}: requires either file or media_url.`,
+        });
+      }
+ 
+      if (w.file_ref && !filesByField[w.file_ref]) {
+        return res.status(400).json({
+          success: false,
+          message: `Work #${i + 1}: missing uploaded file '${w.file_ref}'.`,
+        });
+      }
+    }
+  }
+ 
+  // ===================================================
+  // 9. Media — file/url exclusivity, file_ref existence
+  // ===================================================
+  if (media && media.length > 0) {
+    for (let i = 0; i < media.length; i++) {
+      const m = media[i];
+ 
+      if (m.file_ref && m.media_url) {
+        return res.status(400).json({
+          success: false,
+          message: `Media #${i + 1}: cannot have both file and media_url.`,
+        });
+      }
+ 
+      if (!m.file_ref && !m.media_url) {
+        return res.status(400).json({
+          success: false,
+          message: `Media #${i + 1}: requires either file or media_url.`,
+        });
+      }
+ 
+      if (m.file_ref && !filesByField[m.file_ref]) {
+        return res.status(400).json({
+          success: false,
+          message: `Media #${i + 1}: missing uploaded file '${m.file_ref}'.`,
+        });
+      }
+    }
+  }
+ 
+  // ===================================================
+  // 11. References — required fields
+  // ===================================================
+  if (references && references.length > 0) {
+    for (let i = 0; i < references.length; i++) {
+      const r = references[i];
+ 
+      if (!r.title) {
+        return res.status(400).json({
+          success: false,
+          message: `Reference #${i + 1}: title is required.`,
+        });
+      }
+ 
+      if (!r.citation) {
+        return res.status(400).json({
+          success: false,
+          message: `Reference #${i + 1}: citation is required.`,
+        });
+      }
+    }
+  }
+ 
   try {
+    // ===================================================
+    // 2. User permissions
+    // ===================================================
     const user = await prisma.users.findUnique({ where: { id: userId } });
     if (!user || !user.allowed_to_contribute) {
       return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
     }
-
+ 
     const parsedLanguageId = language_id ? parseInt(language_id) : null;
-
-    // If linking to an existing scholar, validate it exists and isn't already
-    // covered by an approved version in this language BEFORE opening the
-    // transaction, so we can return a clean 404/400 without touching the DB.
+    const parsedRegionId = region_id ? parseInt(region_id) : null;
+ 
+    if (language_id && Number.isNaN(parsedLanguageId)) {
+      return res.status(400).json({ success: false, message: "language_id must be a valid number" });
+    }
+ 
+    if (region_id && Number.isNaN(parsedRegionId)) {
+      return res.status(400).json({ success: false, message: "region_id must be a valid number" });
+    }
+ 
+    // ===================================================
+    // 6. Language exists
+    // ===================================================
+    if (parsedLanguageId) {
+      const language = await prisma.languages.findUnique({
+        where: { language_id: parsedLanguageId },
+      });
+ 
+      if (!language) {
+        return res.status(400).json({ success: false, message: "Invalid language." });
+      }
+    }
+ 
+    // ===================================================
+    // 5. Region exists — and belongs to the same language
+    // ===================================================
+    if (parsedRegionId) {
+      const region = await prisma.regions.findUnique({
+        where: { region_id: parsedRegionId },
+      });
+ 
+      if (!region) {
+        return res.status(400).json({ success: false, message: "Invalid region." });
+      }
+ 
+      if (parsedLanguageId && region.language_id !== parsedLanguageId) {
+        return res.status(400).json({
+          success: false,
+          message: "region_id does not belong to the given language_id.",
+        });
+      }
+    }
+ 
+    // ===================================================
+    // 7. Disciplines exist
+    // ===================================================
+    if (discipline_ids && discipline_ids.length > 0) {
+      const found = await prisma.disciplines.findMany({
+        where: { discipline_id: { in: discipline_ids } },
+      });
+ 
+      if (found.length !== discipline_ids.length) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more disciplines are invalid.",
+        });
+      }
+    }
+ 
+    // ===================================================
+    // 3 & 4. Existing scholar / language version
+    // ===================================================
     let existingScholar = null;
     if (scholar_id) {
       existingScholar = await prisma.scholars.findUnique({
         where: { scholar_id: parseInt(scholar_id) },
       });
-
+ 
       if (!existingScholar) {
-        return res.status(404).json({
-          success: false,
-          message: "Scholar not found",
-        });
+        return res.status(404).json({ success: false, message: "Scholar not found" });
       }
-
+ 
       if (parsedLanguageId) {
         const existingVersion = await prisma.scholar_versions.findFirst({
           where: {
@@ -59,7 +315,7 @@ exports.createScholar = async (req, res) => {
             status: "approved",
           },
         });
-
+ 
         if (existingVersion) {
           return res.status(400).json({
             success: false,
@@ -68,31 +324,27 @@ exports.createScholar = async (req, res) => {
         }
       }
     }
-
+ 
+    // ===================================================
+    // Validation complete — proceed to create everything
+    // ===================================================
     const { scholar, version } = await prisma.$transaction(async (tx) => {
-      // ── Get or create the scholar identity ──
       const scholar = existingScholar
         ? existingScholar
         : await tx.scholars.create({
-            data: {
-              created_by: userId,
-              created_at: new Date(),
-            },
+            data: { created_by: userId, created_at: new Date() },
           });
-
-      // ── Create the version ──
+ 
       const version = await tx.scholar_versions.create({
         data: {
           scholar_id: scholar.scholar_id,
           language_id: parsedLanguageId,
           canonical_name,
-          region: region || null,
-          birth_date_gerogean: birth_date_gregorian || null,
-          birth_date_hijri: birth_date_hijri || null,
-          death_date_gerogean: death_date_gregorian || null,
-          death_date_hijri: death_date_hijri || null,
-          century_hijri: century_hijri || null,
-          century_gregorian: century_gregorian || null,
+          region_id: parsedRegionId,
+          century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
+          century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
+          century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
+          century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
           biography,
           version_type: "creation",
           status: "pending",
@@ -100,63 +352,138 @@ exports.createScholar = async (req, res) => {
           created_at: new Date(),
         },
       });
-
-      // ── Aliases ──
+ 
       if (aliases && aliases.length > 0) {
         await tx.scholar_aliases.createMany({
-          data: aliases.map((alias) => ({
+          data: aliases.map((alias) => ({ version_id: version.version_id, alias_name: alias })),
+        });
+      }
+ 
+      if (dates && dates.length > 0) {
+        await tx.scholar_dates.createMany({
+          data: dates.map((d) => ({
             version_id: version.version_id,
-            alias_name: alias,
+            date_type: d.date_type,
+            calendar: d.calendar,
+            year: d.year ? parseInt(d.year) : null,
+            is_approximate: !!d.is_approximate,
+            raw_text: d.raw_text || null,
           })),
         });
       }
-
-      // ── References ──
-      if (references && references.length > 0) {
-        await tx.scholar_references.createMany({
-          data: references.map((ref) => ({
-            version_id: version.version_id,
-            title: ref.title || null,
-            citation: ref.citation || null,
-            url: ref.url || null,
-          })),
-        });
-      }
-
-      // ── Disciplines — only on new scholar, not on a language version ──
+ 
       if (!scholar_id && discipline_ids && discipline_ids.length > 0) {
         await tx.scholar_disciplines.createMany({
-          data: discipline_ids.map((did) => ({
-            scholar_id: scholar.scholar_id,
-            discipline_id: did,
-          })),
+          data: discipline_ids.map((did) => ({ scholar_id: scholar.scholar_id, discipline_id: did })),
           skipDuplicates: true,
         });
       }
-
-      // ── Track contributor ──
+ 
       await tx.scholar_contributors.upsert({
-        where: {
-          scholar_id_user_id: {
-            scholar_id: scholar.scholar_id,
-            user_id: userId,
-          },
-        },
+        where: { scholar_id_user_id: { scholar_id: scholar.scholar_id, user_id: userId } },
         create: { scholar_id: scholar.scholar_id, user_id: userId },
         update: {},
       });
-
+ 
       return { scholar, version };
     });
-
-    // ── Notify admins that a new submission needs review ──
-    // NOTE: adjust the `where` clause below to match however admins are
-    // identified in your schema (e.g. a `role` column instead of `is_admin`).
+ 
+    // ──────────────────────────────────────────────────────────────
+    // Post-transaction: image / works / media / references
+    // NOTE: these services still do the Cloudinary upload AND the DB
+    // write in a single call. Full doc-7 architecture (upload all
+    // files, then one transaction) would require splitting each
+    // service into an "upload" step and a "write" step — not done
+    // here since those service files weren't provided. Because every
+    // input was validated above, none of these calls should fail on
+    // bad input anymore — only on infra issues (e.g. Cloudinary down).
+    // ──────────────────────────────────────────────────────────────
+    const sideEffectErrors = [];
+ 
+    // ── Profile image ──
+    let imageResult = null;
+    const imageFile = filesByField["image"];
+    if (imageFile) {
+      try {
+        imageResult = await uploadScholarImageService({
+          version_id: version.version_id,
+          file: imageFile,
+        });
+      } catch (err) {
+        sideEffectErrors.push({ type: "image", message: err.message });
+      }
+    }
+ 
+    // ── Works ──
+    const workResults = [];
+    if (works && works.length > 0) {
+      for (let i = 0; i < works.length; i++) {
+        const w = works[i];
+        try {
+          const file = w.file_ref ? filesByField[w.file_ref] : undefined;
+          const created = await createWorkService({
+            version_id: version.version_id,
+            title: w.title,
+            year: w.year,
+            format: w.format,
+            description: w.description,
+            media_url: w.media_url,
+            file,
+          });
+          workResults.push(created);
+        } catch (err) {
+          sideEffectErrors.push({ type: "work", index: i, message: err.message });
+        }
+      }
+    }
+ 
+    // ── Media ──
+    const mediaResults = [];
+    if (media && media.length > 0) {
+      for (let i = 0; i < media.length; i++) {
+        const m = media[i];
+        try {
+          const file = m.file_ref ? filesByField[m.file_ref] : undefined;
+          const created = await uploadMediaService({
+            version_id: version.version_id,
+            title: m.title,
+            year: m.year,
+            description: m.description,
+            media_url: m.media_url,
+            file,
+            userId,
+          });
+          mediaResults.push(created);
+        } catch (err) {
+          sideEffectErrors.push({ type: "media", index: i, message: err.message });
+        }
+      }
+    }
+ 
+    // ── References ──
+    const referenceResults = [];
+    if (references && references.length > 0) {
+      for (let i = 0; i < references.length; i++) {
+        const r = references[i];
+        try {
+          const created = await createReferenceService({
+            version_id: version.version_id,
+            title: r.title,
+            citation: r.citation,
+            url: r.url,
+          });
+          referenceResults.push(created);
+        } catch (err) {
+          sideEffectErrors.push({ type: "reference", index: i, message: err.message });
+        }
+      }
+    }
+ 
     const admins = await prisma.users.findMany({
-      where: { is_admin: true },
+      where: { roles: { role_name: "admin" } },
       select: { id: true },
     });
-
+ 
     if (admins.length > 0) {
       await prisma.notifications.createMany({
         data: admins.map((admin) => ({
@@ -171,30 +498,33 @@ exports.createScholar = async (req, res) => {
         })),
       });
     }
-
+ 
     res.status(201).json({
       success: true,
-      message: scholar_id
-        ? "New language version submitted for review"
-        : "Scholar submitted for review",
-      data: { scholar, version },
+      message: scholar_id ? "New language version submitted for review" : "Scholar submitted for review",
+      data: {
+        scholar,
+        version: imageResult || version,
+        works: workResults,
+        media: mediaResults,
+        references: referenceResults,
+      },
+      warnings: sideEffectErrors.length > 0 ? sideEffectErrors : undefined,
     });
   } catch (error) {
     console.error("createScholar error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+ 
 
-// check if the feild nme corretc 
-// do A-z and Z-a 
-// do tehy suprot languges?
-// veyt contrbbuion only on apporved
 
 exports.getPublishedScholars = async (req, res) => {
   const {
     lang = "ar",
-    region,
+    region,     // now expects region_id(s), comma-separated
     century,
+    century_calendar = "gregorian", // "gregorian" | "hijri" — which range to filter against
     discipline,
   } = req.query;
 
@@ -223,20 +553,20 @@ exports.getPublishedScholars = async (req, res) => {
     };
 
     if (region) {
-      versionWhere.region = {
-        in: region.split(","),
+      versionWhere.region_id = {
+        in: region.split(",").map(Number),
       };
     }
 
     if (century) {
-      versionWhere.century_gregorian = {
-        in: century.split(","),
-      };
-
-      // If you prefer Hijri centuries instead:
-      // versionWhere.century_hijri = {
-      //   in: century.split(","),
-      // };
+      const c = parseInt(century);
+      if (century_calendar === "hijri") {
+        versionWhere.century_hijri_start = { lte: c };
+        versionWhere.century_hijri_end = { gte: c };
+      } else {
+        versionWhere.century_gregorian_start = { lte: c };
+        versionWhere.century_gregorian_end = { gte: c };
+      }
     }
 
     // ----------------------------
@@ -278,16 +608,15 @@ exports.getPublishedScholars = async (req, res) => {
           include: {
             scholar_aliases: true,
             languages: true,
+            regions: true,
+            scholar_dates: true,
           },
         },
 
+        // ── Disciplines are a flat table now (no translations) ──
         scholar_disciplines: {
           include: {
-            disciplines: {
-              include: {
-                discipline_translations: true,
-              },
-            },
+            disciplines: true,
           },
         },
       },
@@ -341,6 +670,8 @@ exports.getScholarById = async (req, res) => {
           include: {
             scholar_aliases: true,
             languages: true,
+            regions: true,
+            scholar_dates: true,
             internal_links: {
               include: {
                 scholars: true,
@@ -349,13 +680,10 @@ exports.getScholarById = async (req, res) => {
           },
         },
 
+        // ── Disciplines are a flat table now (no translations) ──
         scholar_disciplines: {
           include: {
-            disciplines: {
-              include: {
-                discipline_translations: true,
-              },
-            },
+            disciplines: true,
           },
         },
 
@@ -490,16 +818,15 @@ exports.editScholar = async (req, res) => {
   const {
     canonical_name,
     aliases,
-    region,
-    birth_date_gregorian,
-    birth_date_hijri,
-    death_date_gregorian,
-    death_date_hijri,
-    century_hijri,
-    century_gregorian,
+    region_id,          // ← was: region (string)
+    century_hijri_start,
+    century_hijri_end,
+    century_gregorian_start,
+    century_gregorian_end,
+    dates,              // ← NEW: array of { date_type, calendar, year, is_approximate, raw_text }
     biography,
     language_id,
-    changed_fields, // array like ["biography", "region"] — for revision tracking
+    changed_fields, // array like ["biography", "region_id"] — for revision tracking
     references,
   } = req.body;
 
@@ -509,6 +836,31 @@ exports.editScholar = async (req, res) => {
       message: "canonical_name and biography are required",
     });
   }
+   if (dates && dates.length > 0) {
+  for (const d of dates) {
+    if (d.year == null) continue;
+
+    const year = parseInt(d.year, 10);
+
+    if (d.calendar === "gregorian") {
+      if (year < 1 || year > 2026) {
+        return res.status(400).json({
+          success: false,
+          message: "Gregorian year must be between 1 and 2026.",
+        });
+      }
+    }
+
+    if (d.calendar === "hijri") {
+      if (year < 1 || year > 1449) {
+        return res.status(400).json({
+          success: false,
+          message: "Hijri year must be between 1 and 1449.",
+        });
+      }
+    }
+  }
+}
 
   try {
     const user = await prisma.users.findUnique({ where: { id: userId } });
@@ -525,6 +877,7 @@ exports.editScholar = async (req, res) => {
     }
 
     const parsedLanguageId = language_id ? parseInt(language_id) : null;
+    const parsedRegionId = region_id ? parseInt(region_id) : null;
 
     // Optional safeguard: block a second pending edit in the same language
     // while one is already awaiting review. Remove this block if you'd
@@ -562,13 +915,11 @@ exports.editScholar = async (req, res) => {
           scholar_id: scholarId,
           language_id: parsedLanguageId,
           canonical_name,
-          region: region || null,
-          birth_date_gerogean: birth_date_gregorian || null,
-          birth_date_hijri: birth_date_hijri || null,
-          death_date_gerogean: death_date_gregorian || null,
-          death_date_hijri: death_date_hijri || null,
-          century_hijri: century_hijri || null,
-          century_gregorian: century_gregorian || null,
+          region_id: parsedRegionId,
+          century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
+          century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
+          century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
+          century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
           biography,
           version_type: "edition",
           status: "pending",
@@ -583,6 +934,20 @@ exports.editScholar = async (req, res) => {
           data: aliases.map((alias) => ({
             version_id: newVersion.version_id,
             alias_name: alias,
+          })),
+        });
+      }
+
+      // Save dates for this new version
+      if (dates && dates.length > 0) {
+        await tx.scholar_dates.createMany({
+          data: dates.map((d) => ({
+            version_id: newVersion.version_id,
+            date_type: d.date_type,
+            calendar: d.calendar,
+            year: d.year ? parseInt(d.year) : null,
+            is_approximate: !!d.is_approximate,
+            raw_text: d.raw_text || null,
           })),
         });
       }
@@ -611,10 +976,14 @@ exports.editScholar = async (req, res) => {
     });
 
     // ── Notify admins that an edit needs review ──
-    // NOTE: adjust the `where` clause below to match however admins are
-    // identified in your schema (e.g. a `role` column instead of `is_admin`).
+    // FIX: `is_admin` doesn't exist on `users` — admin status comes from
+    // `roles.role_name`, same as createScholar.
     const admins = await prisma.users.findMany({
-      where: { is_admin: true },
+      where: {
+        roles: {
+          role_name: "admin",
+        },
+      },
       select: { id: true },
     });
 
@@ -659,5 +1028,155 @@ exports.getMySubmissions = async (req, res) => {
   } catch (error) {
     console.error("getMySubmissions error:", error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+exports.getScholarByName = async (req, res) => {
+  const {
+    q,
+    lang = "ar",
+  } = req.query;
+
+  if (!q) {
+    return res.status(400).json({
+      success: false,
+      message: "Search query is required",
+    });
+  }
+
+  try {
+    // Requested language
+    const requestedLanguage = await prisma.languages.findFirst({
+      where: {
+        code: lang,
+      },
+    });
+
+    // ---------------------------------
+    // Search by canonical name or alias
+    // ---------------------------------
+
+    const matchedVersion = await prisma.scholar_versions.findFirst({
+      where: {
+        status: "approved",
+        OR: [
+          {
+            canonical_name: {
+              contains: q,
+            },
+          },
+          {
+            scholar_aliases: {
+              some: {
+                alias_name: {
+                  contains: q,
+                },
+              },
+            },
+          },
+        ],
+      },
+      include: {
+        scholar_aliases: true,
+      },
+    });
+
+    if (!matchedVersion) {
+      return res.status(404).json({
+        success: false,
+        message: "Scholar not found",
+      });
+    }
+
+    // ---------------------------------
+    // Try requested language first
+    // ---------------------------------
+
+    let version = null;
+
+    if (requestedLanguage) {
+      version = await prisma.scholar_versions.findFirst({
+        where: {
+          scholar_id: matchedVersion.scholar_id,
+          language_id: requestedLanguage.language_id,
+          status: "approved",
+        },
+      });
+    }
+
+    // ---------------------------------
+    // Fallback to any approved language
+    // ---------------------------------
+
+    if (!version) {
+      version = await prisma.scholar_versions.findFirst({
+        where: {
+          scholar_id: matchedVersion.scholar_id,
+          status: "approved",
+        },
+        orderBy: {
+          created_at: "asc",
+        },
+      });
+    }
+
+    if (!version) {
+      return res.status(404).json({
+        success: false,
+        message: "No approved version found",
+      });
+    }
+
+    // ---------------------------------
+    // Return full scholar
+    // ---------------------------------
+
+    const scholar = await prisma.scholars.findUnique({
+      where: {
+        scholar_id: version.scholar_id,
+      },
+      include: {
+        scholar_versions: {
+          where: {
+            version_id: version.version_id,
+          },
+          include: {
+            scholar_aliases: true,
+            scholar_references: true,
+            scholar_works: true,
+            languages: true,
+            regions: true,
+            scholar_dates: true,
+          },
+        },
+
+        // ── Disciplines are a flat table now (no translations) ──
+        scholar_disciplines: {
+          include: {
+            disciplines: true,
+          },
+        },
+
+        media: {
+          where: {
+            status: "approved",
+          },
+        },
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: scholar,
+    });
+
+  } catch (err) {
+    console.error(err);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
