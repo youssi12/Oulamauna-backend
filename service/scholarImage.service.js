@@ -25,6 +25,7 @@ const uploadScholarImageService = async ({ version_id, file }) => {
     },
     data: {
       image_url: file.path,
+      image_status: "pending",
     },
   });
 

@@ -4,6 +4,7 @@ exports.createReferenceService = async ({
   version_id,
   title,
   citation,
+  created_by,
   url,
 }) => {
   const version = await prisma.scholar_versions.findUnique({
@@ -26,6 +27,7 @@ exports.createReferenceService = async ({
       title: title || null,
       citation: citation || null,
       url: url || null,
+      created_by:created_by
     },
   });
 };

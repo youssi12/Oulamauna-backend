@@ -8,6 +8,7 @@ exports.createWorkService = async ({
   description,
   media_url,
   file,
+  created_by,
 }) => {
   const version = await prisma.scholar_versions.findUnique({
     where: {
@@ -29,6 +30,7 @@ exports.createWorkService = async ({
     year: year ? parseInt(year) : null,
     format,
     description: description || null,
+    created_by:created_by
   };
 
   if (file) {

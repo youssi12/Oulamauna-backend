@@ -1,5 +1,5 @@
 const prisma = require("../config/db");
-const { createReferenceService } = require("../service/refrences.service");
+const { createReferenceService } = require("../service/references.service");
 
 // ===================================================
 // Create a reference for a scholar version (standalone)
@@ -22,7 +22,7 @@ exports.createReference = async (req, res) => {
       return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
     }
 
-    const reference = await createReferenceService({ version_id, title, citation, url });
+    const reference = await createReferenceService({ version_id, title, citation, created_by: userId,url });
 
     return res.status(201).json({
       success: true,
@@ -165,5 +165,172 @@ exports.deleteReference = async (req, res) => {
   } catch (error) {
     console.error("deleteReference error:", error);
     res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ===================================================
+//  approve a reference
+// ===================================================
+
+exports.approveReference = async (req, res) => {
+  const referenceId = parseInt(req.params.id);
+
+  try {
+    const reference = await prisma.scholar_references.findUnique({
+      where: {
+        reference_id: referenceId,
+      },
+    });
+
+    if (!reference) {
+      return res.status(404).json({
+        success: false,
+        message: "Reference not found",
+      });
+    }
+
+    // Make sure it is actually pending
+    if (reference.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Reference is not pending",
+      });
+    }
+
+    const updated = await prisma.scholar_references.update({
+      where: {
+        reference_id: referenceId,
+      },
+      data: {
+        status: "approved",
+      },
+    });
+
+    // Notify the contributor
+if (reference.created_by) {
+  await prisma.notifications.create({
+    data: {
+      user_id: reference.created_by,
+      type: "REFERENCE_APPROVED",
+      message: `Your reference "${reference.title || "reference"}" has been approved.`,
+      related_entity: `reference:${referenceId}`,
+      is_read: false,
+      created_at: new Date(),
+    },
+  });
+}
+    res.json({
+      success: true,
+      message: "Reference approved",
+      data: updated,
+    });
+  } catch (error) {
+    console.error("approveReference error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+// ===================================================
+//   reject a reference
+// ===================================================
+
+exports.rejectReference = async (req, res) => {
+  const referenceId = parseInt(req.params.id);
+  const { reason } = req.body;
+
+  try {
+    const reference = await prisma.scholar_references.findUnique({
+      where: {
+        reference_id: referenceId,
+      },
+    });
+
+    if (!reference) {
+      return res.status(404).json({
+        success: false,
+        message: "Reference not found",
+      });
+    }
+
+    if (reference.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Reference is not pending",
+      });
+    }
+
+    const updated = await prisma.scholar_references.update({
+      where: {
+        reference_id: referenceId,
+      },
+      data: {
+        status: "rejected",
+      },
+    });
+ // Notify the contributor
+if (reference.created_by) {
+  await prisma.notifications.create({
+    data: {
+      user_id: reference.created_by,
+      type: "REFERENCE_REJECTED",
+      message: `Your reference "${reference.title || "reference"}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+      related_entity: `reference:${referenceId}`,
+      is_read: false,
+      created_at: new Date(),
+    },
+  });
+}
+    res.json({
+      success: true,
+      message: "Reference rejected",
+      data: updated,
+      reason: reason || null,
+    });
+  } catch (error) {
+    console.error("rejectReference error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+exports.getPendingReferences = async (req, res) => {
+  try {
+    const pending = await prisma.scholar_references.findMany({
+      where: {
+        status: "pending",
+      },
+      include: {
+        scholar_versions: {
+          include: {
+            scholars: true,
+            languages: true,
+          },
+        },
+      },
+      orderBy: {
+        reference_id: "asc",
+      },
+    });
+
+    res.json({
+      success: true,
+      data: pending,
+    });
+  } catch (error) {
+    console.error("getPendingReferences error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };

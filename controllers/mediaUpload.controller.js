@@ -365,10 +365,59 @@ const getScholarMedia = async (req, res) => {
   }
 };
 
+
+// ======================================================
+// Get pending Media for a Version
+// ======================================================
+
+const getPendingMedia = async (req, res) => {
+  try {
+    const pending = await prisma.media.findMany({
+      where: {
+        status: "pending",
+      },
+      include: {
+        scholar_versions: {
+          include: {
+            scholars: true,
+            languages: true,
+          },
+        },
+        users: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+      },
+      orderBy: {
+        uploaded_at: "asc",
+      },
+    });
+
+    res.json({
+      success: true,
+      data: pending,
+    });
+  } catch (error) {
+    console.error("getPendingMedia error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
 module.exports = {
   uploadMedia,
   approveMedia,
   rejectMedia,
   deleteMedia,
+   getPendingMedia,
   getScholarMedia,
+  
 };

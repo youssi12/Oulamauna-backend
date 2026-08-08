@@ -1,31 +1,67 @@
 const prisma = require("../config/db");
 
 exports.getPendingCreatedScholars = async (req, res) => {
-    try {
-        const pending = await prisma.scholar_versions.findMany({
-            where: { status: "pending", version_type: "creation" },
-            include: {
-                scholars: true,
-                users: { select: {
-                    id: true, username: true, email: true
-                }},
-                languages: true,
-                scholar_aliases: true,
-                scholar_references: true,
-                regions: true,        // ← added
-                scholar_dates: true,  // ← added
-            },
-            orderBy: { created_at: "asc" }
-        })
- 
-        res.json({ success: true, data: pending });
- 
-    } catch (error) {
-        console.error("getPendingCreatedScholars error:", error);
-        res.status(500).json({ success: false, message: "Server error" });
-    }
-}
- 
+  try {
+    const pending = await prisma.scholar_versions.findMany({
+      where: {
+        status: "pending",
+        version_type: "creation",
+      },
+
+      include: {
+        // Main scholar
+        scholars: true,
+
+        // Contributor
+        users: {
+          select: {
+            id: true,
+            username: true,
+            email: true,
+          },
+        },
+
+        // Language
+        languages: true,
+
+        // Region
+        regions: true,
+
+        // Scholar data
+        scholar_aliases: true,
+        scholar_dates: true,
+
+        // References + status
+        scholar_references: true,
+
+        // Works + status
+        scholar_works: true,
+
+        // Media + status
+        media: true,
+      },
+
+      orderBy: {
+        created_at: "asc",
+      },
+    });
+
+    res.json({
+      success: true,
+      data: pending,
+    });
+
+  } catch (error) {
+    console.error("getPendingCreatedScholars error:", error);
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
 exports.getPendingEditedScholars = async (req, res) => {
   try {
     const pending = await prisma.scholar_versions.findMany({
@@ -173,46 +209,107 @@ exports.approveScholar = async (req, res) => {
 };
 
 exports.rejectScholar = async (req, res) => {
-  const versionId = parseInt(req.params.id);
-  const { reason } = req.body;
+    const versionId = parseInt(req.params.id);
+    const { reason } = req.body;
 
-  try {
-    const version = await prisma.scholar_versions.findUnique({
-      where: { version_id: versionId },
-    });
+    try {
+        const version = await prisma.scholar_versions.findUnique({
+            where: { version_id: versionId },
+        });
 
-    if (!version) {
-      return res.status(404).json({ success: false, message: "Version not found" });
+        if (!version) {
+            return res.status(404).json({
+                success: false,
+                message: "Version not found"
+            });
+        }
+
+        if (version.status !== "pending") {
+            return res.status(400).json({
+                success: false,
+                message: "Version is not pending"
+            });
+        }
+
+        const updated = await prisma.$transaction(async (tx) => {
+
+            // Reject the scholar version
+            const rejectedVersion = await tx.scholar_versions.update({
+                where: { version_id: versionId },
+                data: {
+                    status: "rejected",
+                    image_status:
+                        version.version_type === "creation"
+                            ? "rejected"
+                            : undefined
+                }
+            });
+
+            // Only cascade rejection for a NEW scholar
+            if (version.version_type === "creation") {
+
+                await tx.scholar_works.updateMany({
+                    where: {
+                        version_id: versionId,
+                        status: "pending"
+                    },
+                    data: {
+                        status: "rejected"
+                    }
+                });
+
+                await tx.scholar_references.updateMany({
+                    where: {
+                        version_id: versionId,
+                        status: "pending"
+                    },
+                    data: {
+                        status: "rejected"
+                    }
+                });
+
+                await tx.media.updateMany({
+                    where: {
+                        version_id: versionId,
+                        status: "pending"
+                    },
+                    data: {
+                        status: "rejected"
+                    }
+                });
+            }
+
+            return rejectedVersion;
+        });
+
+        // Notify contributor
+        if (version.created_by) {
+            await prisma.notifications.create({
+                data: {
+                    user_id: version.created_by,
+                    type: "SCHOLAR_REJECTED",
+                    message: `Your scholar submission "${version.canonical_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+                    related_entity: `scholar_version:${versionId}`,
+                    is_read: false,
+                    created_at: new Date(),
+                }
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Scholar rejected",
+            data: updated
+        });
+
+    } catch (error) {
+        console.error("rejectScholar error:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Server error"
+        });
     }
-
-    if (version.status !== "pending") {
-      return res.status(400).json({ success: false, message: "Version is not pending" });
-    }
-
-    const updated = await prisma.scholar_versions.update({
-      where: { version_id: versionId },
-      data: { status: "rejected" },
-    });
-
-    // Notify the contributor
-    if (version.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: version.created_by,
-          type: "SCHOLAR_REJECTED",
-          message: `Your scholar submission "${version.canonical_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
-          related_entity: `scholar_version:${versionId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
-      });
-    }
-
-    res.json({ success: true, message: "Scholar rejected", data: updated });
-  } catch (error) {
-    console.error("rejectScholar error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
-  }
 };
 
 

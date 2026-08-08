@@ -16,6 +16,6 @@ router.get("/my-submissions", scholarPage.getMySubmissions);
 router.get("/:id", scholarPage.getScholarById);             // Single scholar
 
 // Update
-router.put("/:id", scholarPage.editScholar);
+router.patch("/:id", scholarPage.editScholar);
 
 module.exports = router;

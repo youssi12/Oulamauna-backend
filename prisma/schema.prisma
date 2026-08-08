@@ -227,7 +227,7 @@ model scholar_versions {
   version_id          Int                      @id @default(autoincrement())
   scholar_id          Int?
   language_id         Int?
-  canonical_name      String?                  @db.VarChar(255)
+  canonical_name      String?    @db.VarChar(255)
    
   region_id                  Int?                    
   regions                    regions?                 @relation(fields: [region_id], references: [region_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_4")
@@ -238,6 +238,7 @@ model scholar_versions {
   century_gregorian_end   Int?
   biography           String?                  @db.Text
   image_url           String?                  @db.VarChar(500)
+  image_status media_status?
   status              scholar_versions_status?
   created_by          Int?
   created_at          DateTime?                @db.Timestamp(0)
@@ -263,13 +264,15 @@ model scholar_versions {
  model scholar_references {
   reference_id Int @id @default(autoincrement())
   version_id   Int
+  created_by     Int?  
 
   title        String? @db.VarChar(255)
   citation     String? @db.Text
   url          String? @db.VarChar(500)
+  status media_status @default(pending)
 
   scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
-
+  users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   @@index([version_id])
 }
 
@@ -311,10 +314,12 @@ model users {
   password_resets      password_resets[]
   reports              reports[]
   allowed_to_contribute Boolean  @default(true) 
- // revisions            revisions[]
+ 
   scholar_contributors scholar_contributors[]
   scholar_versions     scholar_versions[]
   scholars             scholars[]
+  scholar_works       scholar_works[]
+  scholar_references  scholar_references[]
   roles                roles?                 @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction, map: "users_ibfk_1")
 
   @@index([role_id], map: "role_id")
@@ -357,7 +362,7 @@ model scholar_dates {
 }
 
 
-enum notifications_type {
+ enum notifications_type {
   NEW_SCHOLAR_SUBMISSION
   EDIT_PROPOSAL
   REPORT_SUBMITTED
@@ -365,15 +370,21 @@ enum notifications_type {
   COMMENT_ON_SCHOLAR
   SCHOLAR_APPROVED
   SCHOLAR_REJECTED
-   MEDIA_APPROVED
+  MEDIA_APPROVED
   MEDIA_REJECTED
+  IMAGE_APPROVED
+  IMAGE_REJECTED
+  WORK_APPROVED
+  WORK_REJECTED
+  REFERENCE_APPROVED
+  REFERENCE_REJECTED
   NEW_DISCIPLINE_SUBMISSION
   NEW_REGION_SUBMISSION
 }
-
 model scholar_works {
   work_id        Int                @id @default(autoincrement())
   version_id     Int
+  created_by   Int?  
 
   title          String             @db.VarChar(255)
   year           Int?
@@ -384,8 +395,10 @@ model scholar_works {
   file_name      String?            @db.VarChar(255)
   file_path      String?            @db.VarChar(500)
   source_type    media_source_type?
+  status media_status @default(pending)
 
   scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
+   users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([version_id])
 }

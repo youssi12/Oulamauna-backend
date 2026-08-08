@@ -2,7 +2,7 @@ const prisma = require("../config/db");
 const { uploadScholarImageService } = require("../service/scholarImage.service");
 const { createWorkService } = require("../service/works.service");
 const { uploadMediaService } = require("../service/media.service");
-const { createReferenceService } = require("../service/refrences.service");
+const { createReferenceService } = require("../service/references.service");
 
 
 const WORK_FORMATS = new Set(["BOOK","ARTICLE","TREATISE","MANUSCRIPT","LECTURE","SERMON","FATWA","POEM","LETTER","COMMENTARY","TRANSLATION","RESEARCH","COURSE","DEVICE","INVENTION","SOFTWARE","MAP","OTHER",]);
@@ -156,12 +156,12 @@ if (!language_id) {
         });
       }
  
-      if (!w.file_ref && !w.media_url) {
-        return res.status(400).json({
-          success: false,
-          message: `Work #${i + 1}: requires either file or media_url.`,
-        });
-      }
+      // if (!w.file_ref && !w.media_url) {
+      //   return res.status(400).json({
+      //     success: false,
+      //     message: `Work #${i + 1}: requires either file or media_url.`,
+      //   });
+      // }
  
       if (w.file_ref && !filesByField[w.file_ref]) {
         return res.status(400).json({
@@ -428,6 +428,7 @@ if (!language_id) {
             format: w.format,
             description: w.description,
             media_url: w.media_url,
+            created_by:userId,
             file,
           });
           workResults.push(created);
@@ -521,18 +522,21 @@ if (!language_id) {
 
 exports.getPublishedScholars = async (req, res) => {
   const {
-    lang = "ar",
-    region,     // now expects region_id(s), comma-separated
+    lang = "1",
+    region, // region_id(s), comma-separated
     century,
-    century_calendar = "gregorian", // "gregorian" | "hijri" — which range to filter against
+    century_calendar = "gregorian", // "gregorian" | "hijri"
     discipline,
   } = req.query;
 
   try {
+    // ----------------------------
     // Find requested language
+    // ----------------------------
+
     const language = await prisma.languages.findFirst({
       where: {
-        code: lang,
+        language_id: Number(lang),
       },
     });
 
@@ -560,6 +564,7 @@ exports.getPublishedScholars = async (req, res) => {
 
     if (century) {
       const c = parseInt(century);
+
       if (century_calendar === "hijri") {
         versionWhere.century_hijri_start = { lte: c };
         versionWhere.century_hijri_end = { gte: c };
@@ -583,9 +588,7 @@ exports.getPublishedScholars = async (req, res) => {
       scholarWhere.scholar_disciplines = {
         some: {
           discipline_id: {
-            in: discipline
-              .split(",")
-              .map(Number),
+            in: discipline.split(",").map(Number),
           },
         },
       };
@@ -601,19 +604,62 @@ exports.getPublishedScholars = async (req, res) => {
       include: {
         scholar_versions: {
           where: versionWhere,
+
           orderBy: {
             created_at: "desc",
           },
+
           take: 1,
+
           include: {
+            // ----------------------------
+            // Basic scholar information
+            // ----------------------------
+
             scholar_aliases: true,
+
             languages: true,
+
             regions: true,
+
             scholar_dates: true,
+
+            // ----------------------------
+            // References
+            // ----------------------------
+
+            scholar_references: {
+              where: {
+                status: "approved",
+              },
+            },
+
+            // ----------------------------
+            // Media
+            // ----------------------------
+
+            media: {
+              where: {
+                status: "approved",
+              },
+            },
+
+            // ----------------------------
+            // Works
+            // ----------------------------
+
+            scholar_works: {
+              where: {
+                status: "approved",
+              },
+            },
           },
         },
 
-        // ── Disciplines are a flat table now (no translations) ──
+        // ----------------------------
+        // Disciplines
+        // ----------------------------
+
         scholar_disciplines: {
           include: {
             disciplines: true,
@@ -627,7 +673,6 @@ exports.getPublishedScholars = async (req, res) => {
       count: scholars.length,
       data: scholars,
     });
-
   } catch (error) {
     console.error("getPublishedScholars error:", error);
 
@@ -811,6 +856,7 @@ exports.getScholarById = async (req, res) => {
   }
 };
 
+  
 exports.editScholar = async (req, res) => {
   const scholarId = parseInt(req.params.id);
   const userId = req.user.id;
@@ -818,70 +864,63 @@ exports.editScholar = async (req, res) => {
   const {
     canonical_name,
     aliases,
-    region_id,          // ← was: region (string)
+    region_id,
     century_hijri_start,
     century_hijri_end,
     century_gregorian_start,
     century_gregorian_end,
-    dates,              // ← NEW: array of { date_type, calendar, year, is_approximate, raw_text }
+    dates,
     biography,
-    language_id,
-    changed_fields, // array like ["biography", "region_id"] — for revision tracking
+    language_id = 1,
     references,
+    media,
+    works,
   } = req.body;
 
-  if (!canonical_name || !biography) {
+  if (!canonical_name) {
     return res.status(400).json({
       success: false,
-      message: "canonical_name and biography are required",
+      message: "canonical_name is required",
     });
   }
-   if (dates && dates.length > 0) {
-  for (const d of dates) {
-    if (d.year == null) continue;
-
-    const year = parseInt(d.year, 10);
-
-    if (d.calendar === "gregorian") {
-      if (year < 1 || year > 2026) {
-        return res.status(400).json({
-          success: false,
-          message: "Gregorian year must be between 1 and 2026.",
-        });
-      }
-    }
-
-    if (d.calendar === "hijri") {
-      if (year < 1 || year > 1449) {
-        return res.status(400).json({
-          success: false,
-          message: "Hijri year must be between 1 and 1449.",
-        });
-      }
-    }
-  }
-}
 
   try {
-    const user = await prisma.users.findUnique({ where: { id: userId } });
+    // --------------------------------------------------
+    // 1. Check contributor permission
+    // --------------------------------------------------
+
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+    });
+
     if (!user || !user.allowed_to_contribute) {
-      return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to contribute",
+      });
     }
+
+    // --------------------------------------------------
+    // 2. Check scholar exists
+    // --------------------------------------------------
 
     const scholar = await prisma.scholars.findUnique({
       where: { scholar_id: scholarId },
     });
 
     if (!scholar) {
-      return res.status(404).json({ success: false, message: "Scholar not found" });
+      return res.status(404).json({
+        success: false,
+        message: "Scholar not found",
+      });
     }
 
-    const parsedLanguageId = language_id ? parseInt(language_id) : null;
-    const parsedRegionId = region_id ? parseInt(region_id) : null;
+    const parsedLanguageId = parseInt(language_id);
 
-    // Optional safeguard: block a second pending edit in the same language
-    // while one is already awaiting review. Remove this block if you'd
-    // rather let moderators see/merge multiple pending edits at once.
+    // --------------------------------------------------
+    // 3. Prevent duplicate pending edit
+    // --------------------------------------------------
+
     const existingPending = await prisma.scholar_versions.findFirst({
       where: {
         scholar_id: scholarId,
@@ -894,97 +933,339 @@ exports.editScholar = async (req, res) => {
     if (existingPending) {
       return res.status(400).json({
         success: false,
-        message: "A pending edit already exists for this scholar in this language",
+        message:
+          "A pending edit already exists for this scholar in this language",
       });
     }
 
-    // Get latest approved version *in the same language* to snapshot what changed
-    const previousVersion = await prisma.scholar_versions.findFirst({
-      where: {
-        scholar_id: scholarId,
-        language_id: parsedLanguageId,
-        status: "approved",
-      },
-      orderBy: { created_at: "desc" },
-    });
+    // --------------------------------------------------
+    // 4. Get the CURRENT APPROVED VERSION
+    //    This is our snapshot/template.
+    // --------------------------------------------------
+
+    const previousVersion =
+      await prisma.scholar_versions.findFirst({
+        where: {
+          scholar_id: scholarId,
+          language_id: parsedLanguageId,
+          status: "approved",
+        },
+        include: {
+          scholar_aliases: true,
+          scholar_references: true,
+          scholar_dates: true,
+          media: true,
+          scholar_works: true,
+        },
+        orderBy: {
+          created_at: "desc",
+        },
+      });
+
+    if (!previousVersion) {
+      return res.status(404).json({
+        success: false,
+        message:
+          "No approved version exists for this scholar in this language",
+      });
+    }
+
+    // --------------------------------------------------
+    // 5. Decide which values to use
+    //
+    // If frontend sends a value -> use the new value.
+    // Otherwise -> keep the old approved value.
+    // --------------------------------------------------
+
+    const finalCanonicalName =
+      canonical_name ?? previousVersion.canonical_name;
+
+    const finalRegionId =
+      region_id !== undefined
+        ? (region_id === null ? null : parseInt(region_id))
+        : previousVersion.region_id;
+
+    const finalHijriStart =
+      century_hijri_start !== undefined
+        ? (century_hijri_start === null
+            ? null
+            : parseInt(century_hijri_start))
+        : previousVersion.century_hijri_start;
+
+    const finalHijriEnd =
+      century_hijri_end !== undefined
+        ? (century_hijri_end === null
+            ? null
+            : parseInt(century_hijri_end))
+        : previousVersion.century_hijri_end;
+
+    const finalGregorianStart =
+      century_gregorian_start !== undefined
+        ? (century_gregorian_start === null
+            ? null
+            : parseInt(century_gregorian_start))
+        : previousVersion.century_gregorian_start;
+
+    const finalGregorianEnd =
+      century_gregorian_end !== undefined
+        ? (century_gregorian_end === null
+            ? null
+            : parseInt(century_gregorian_end))
+        : previousVersion.century_gregorian_end;
+
+    const finalBiography =
+      biography !== undefined
+        ? biography
+        : previousVersion.biography;
+
+    // --------------------------------------------------
+    // 6. Related data
+    //
+    // If frontend sends the array -> use the new array.
+    // If frontend does NOT send it -> clone old data.
+    // --------------------------------------------------
+
+    const finalAliases =
+      aliases !== undefined
+        ? aliases
+        : previousVersion.scholar_aliases.map(
+            (a) => a.alias_name
+          );
+
+    const finalDates =
+      dates !== undefined
+        ? dates
+        : previousVersion.scholar_dates.map((d) => ({
+            date_type: d.date_type,
+            calendar: d.calendar,
+            year: d.year,
+            is_approximate: d.is_approximate,
+            raw_text: d.raw_text,
+          }));
+
+    const finalReferences =
+      references !== undefined
+        ? references
+        : previousVersion.scholar_references.map((r) => ({
+            title: r.title,
+            citation: r.citation,
+            url: r.url,
+          }));
+
+    const finalMedia =
+      media !== undefined
+        ? media
+        : previousVersion.media.map((m) => ({
+            file_name: m.file_name,
+            file_path: m.file_path,
+            media_url: m.media_url,
+            source_type: m.source_type,
+            file_type: m.file_type,
+            status: m.status,
+            uploaded_by: m.uploaded_by,
+            uploaded_at: m.uploaded_at,
+            view_count: m.view_count,
+            like_count: m.like_count,
+            title: m.title,
+            year: m.year,
+            description: m.description,
+          }));
+
+    const finalWorks =
+      works !== undefined
+        ? works
+        : previousVersion.scholar_works.map((w) => ({
+            title: w.title,
+            year: w.year,
+            format: w.format,
+            description: w.description,
+            media_url: w.media_url,
+            file_name: w.file_name,
+            file_path: w.file_path,
+            source_type: w.source_type,
+            status: w.status,
+          }));
+
+    // --------------------------------------------------
+    // 7. Create the complete pending edition
+    // --------------------------------------------------
 
     const newVersion = await prisma.$transaction(async (tx) => {
-      // Create a new pending version
-      const newVersion = await tx.scholar_versions.create({
+      const version = await tx.scholar_versions.create({
         data: {
           scholar_id: scholarId,
           language_id: parsedLanguageId,
-          canonical_name,
-          region_id: parsedRegionId,
-          century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
-          century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
-          century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
-          century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
-          biography,
+
+          canonical_name: finalCanonicalName,
+          region_id: finalRegionId,
+
+          century_hijri_start: finalHijriStart,
+          century_hijri_end: finalHijriEnd,
+
+          century_gregorian_start: finalGregorianStart,
+          century_gregorian_end: finalGregorianEnd,
+
+          biography: finalBiography,
+
+          // IMPORTANT:
+          // The image is also copied from the approved version.
+          image_url: previousVersion.image_url,
+          image_status: previousVersion.image_status,
+
           version_type: "edition",
           status: "pending",
+
           created_by: userId,
           created_at: new Date(),
         },
       });
 
-      // Save aliases for this new version
-      if (aliases && aliases.length > 0) {
+      // ------------------------------------------------
+      // 8. Clone aliases
+      // ------------------------------------------------
+
+      if (finalAliases.length > 0) {
         await tx.scholar_aliases.createMany({
-          data: aliases.map((alias) => ({
-            version_id: newVersion.version_id,
-            alias_name: alias,
+          data: finalAliases.map((alias) => ({
+            version_id: version.version_id,
+            alias_name:
+              typeof alias === "string"
+                ? alias
+                : alias.alias_name,
           })),
         });
       }
 
-      // Save dates for this new version
-      if (dates && dates.length > 0) {
+      // ------------------------------------------------
+      // 9. Clone dates
+      // ------------------------------------------------
+
+      if (finalDates.length > 0) {
         await tx.scholar_dates.createMany({
-          data: dates.map((d) => ({
-            version_id: newVersion.version_id,
+          data: finalDates.map((d) => ({
+            version_id: version.version_id,
             date_type: d.date_type,
             calendar: d.calendar,
-            year: d.year ? parseInt(d.year) : null,
+            year:
+              d.year != null
+                ? parseInt(d.year)
+                : null,
             is_approximate: !!d.is_approximate,
             raw_text: d.raw_text || null,
           })),
         });
       }
 
-      if (references && references.length > 0) {
+      // ------------------------------------------------
+      // 10. Clone references
+      // ------------------------------------------------
+
+      if (finalReferences.length > 0) {
         await tx.scholar_references.createMany({
-          data: references.map((ref) => ({
-            version_id: newVersion.version_id,
+          data: finalReferences.map((ref) => ({
+            version_id: version.version_id,
             title: ref.title || null,
             citation: ref.citation || null,
             url: ref.url || null,
+            status: "pending",
           })),
         });
       }
 
-      // Add as contributor if not already
+      // ------------------------------------------------
+      // 11. Clone media
+      // ------------------------------------------------
+
+      if (finalMedia.length > 0) {
+        await tx.media.createMany({
+          data: finalMedia.map((m) => ({
+            version_id: version.version_id,
+
+            file_name: m.file_name || null,
+            file_path: m.file_path || null,
+            media_url: m.media_url || null,
+
+            source_type: m.source_type || null,
+            file_type: m.file_type || null,
+
+            // The copied media should be reviewed again
+            status: "pending",
+
+            uploaded_by: m.uploaded_by || null,
+            uploaded_at: m.uploaded_at || new Date(),
+
+            view_count: m.view_count || 0,
+            like_count: m.like_count || 0,
+
+            title: m.title || null,
+            year: m.year || null,
+            description: m.description || null,
+          })),
+        });
+      }
+
+      // ------------------------------------------------
+      // 12. Clone works
+      // ------------------------------------------------
+
+      if (finalWorks.length > 0) {
+        await tx.scholar_works.createMany({
+          data: finalWorks.map((w) => ({
+            version_id: version.version_id,
+
+            title: w.title || null,
+            year: w.year || null,
+            format: w.format || null,
+            description: w.description || null,
+
+            media_url: w.media_url || null,
+            file_name: w.file_name || null,
+            file_path: w.file_path || null,
+
+            source_type: w.source_type || null,
+
+            // Works need review again as part of the edition
+            status: "pending",
+
+            created_by: userId,
+          })),
+        });
+      }
+
+      // ------------------------------------------------
+      // 13. Add contributor
+      // ------------------------------------------------
+
       await tx.scholar_contributors.upsert({
         where: {
-          scholar_id_user_id: { scholar_id: scholarId, user_id: userId },
+          scholar_id_user_id: {
+            scholar_id: scholarId,
+            user_id: userId,
+          },
         },
-        create: { scholar_id: scholarId, user_id: userId },
+        create: {
+          scholar_id: scholarId,
+          user_id: userId,
+        },
         update: {},
       });
 
-      return newVersion;
+      return version;
     });
 
-    // ── Notify admins that an edit needs review ──
-    // FIX: `is_admin` doesn't exist on `users` — admin status comes from
-    // `roles.role_name`, same as createScholar.
+    // --------------------------------------------------
+    // 14. Notify admins
+    // --------------------------------------------------
+
     const admins = await prisma.users.findMany({
       where: {
         roles: {
           role_name: "admin",
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+      },
     });
 
     if (admins.length > 0) {
@@ -992,7 +1273,7 @@ exports.editScholar = async (req, res) => {
         data: admins.map((admin) => ({
           user_id: admin.id,
           type: "EDIT_PROPOSAL",
-          message: `Edit proposed for scholar ID ${scholarId} ("${canonical_name}")`,
+          message: `Edit proposed for scholar ID ${scholarId} ("${finalCanonicalName}")`,
           related_entity: `scholar_version:${newVersion.version_id}`,
           is_read: false,
           created_at: new Date(),
@@ -1000,16 +1281,27 @@ exports.editScholar = async (req, res) => {
       });
     }
 
+    // --------------------------------------------------
+    // 15. Response
+    // --------------------------------------------------
+
     res.json({
       success: true,
       message: "Edit submitted for review",
       data: newVersion,
     });
+
   } catch (error) {
     console.error("editScholar error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+
+    res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
   }
 };
+ 
+
 
 exports.getMySubmissions = async (req, res) => {
   const userId = req.user.id;

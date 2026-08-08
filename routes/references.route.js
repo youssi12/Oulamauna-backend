@@ -8,7 +8,7 @@ const {
   getScholarReferences,
   updateReference,
   deleteReference,
-} = require("../controllers/refrences.controller");
+} = require("../controllers/references.controller");
 
 const protect = require("../middlewares/auth.middleware");
 
