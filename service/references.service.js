@@ -17,6 +17,13 @@ exports.createReferenceService = async ({
     throw new Error("Scholar version not found");
   }
 
+  if (version.status === "superseded") {
+    throw new Error("This version has been superseded — use the currently approved version_id.");
+  }
+  if (version.status === "pending" && version.version_type === "edition") {
+    throw new Error("This version is a pending edit with no content of its own yet — use the currently approved version_id.");
+  }
+
   if (!title && !citation && !url) {
     throw new Error("At least one of title, citation, or url is required");
   }
@@ -27,7 +34,7 @@ exports.createReferenceService = async ({
       title: title || null,
       citation: citation || null,
       url: url || null,
-      created_by:created_by
+      created_by: created_by,
     },
   });
 };

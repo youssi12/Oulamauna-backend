@@ -1,9 +1,15 @@
 const { cloudinary } = require("../config/cloudinary");
 const prisma = require("../config/db");
+const { uploadMediaService } = require("../service/media.service");
 
 // ======================================================
 // Upload Media
 // ======================================================
+// FIX: this used to have its own duplicated create logic instead of
+// calling uploadMediaService — meaning the version-status guard added
+// to the service (blocking uploads to superseded/pending-edition
+// versions) never actually ran for this route. Now there is exactly
+// one place that logic lives.
 
 const uploadMedia = async (req, res) => {
   const {
@@ -24,89 +30,15 @@ const uploadMedia = async (req, res) => {
     });
   }
 
-  if (!file && !media_url) {
-    return res.status(400).json({
-      success: false,
-      message: "Provide either a file or a media_url",
-    });
-  }
-
-  if (file && media_url) {
-    return res.status(400).json({
-      success: false,
-      message: "Upload a file OR provide a media_url, not both",
-    });
-  }
-
   try {
-    const version = await prisma.scholar_versions.findUnique({
-      where: {
-        version_id: parseInt(version_id),
-      },
-    });
-
-    if (!version) {
-      return res.status(404).json({
-        success: false,
-        message: "Scholar version not found",
-      });
-    }
-
-    let mediaData = {
-      version_id: parseInt(version_id),
-      title: title || null,
-      year: year ? parseInt(year) : null,
-      description: description || null,
-
-      status: "pending",
-      uploaded_by: userId,
-      uploaded_at: new Date(),
-      view_count: 0,
-      like_count: 0,
-    };
-
-    if (file) {
-      const typeMap = {
-        "application/pdf": "pdf",
-        "audio/mpeg": "audio",
-        "audio/wav": "audio",
-        "audio/ogg": "audio",
-        "video/mp4": "video",
-        "video/webm": "video",
-      };
-
-      mediaData = {
-        ...mediaData,
-        file_name: file.originalname,
-        file_path: file.path,
-        file_type: typeMap[file.mimetype] || "pdf",
-        source_type: "upload",
-      };
-    } else {
-      let file_type = "video";
-
-      const lower = media_url.toLowerCase();
-
-      if (lower.endsWith(".pdf")) {
-        file_type = "pdf";
-      } else if (
-        lower.endsWith(".mp3") ||
-        lower.endsWith(".wav") ||
-        lower.endsWith(".ogg")
-      ) {
-        file_type = "audio";
-      }
-
-      mediaData = {
-        ...mediaData,
-        media_url,
-        file_type,
-        source_type: "external",
-      };
-    }
-
-    const media = await prisma.media.create({
-      data: mediaData,
+    const media = await uploadMediaService({
+      version_id,
+      title,
+      year,
+      description,
+      media_url,
+      file,
+      userId,
     });
 
     res.status(201).json({
@@ -117,9 +49,15 @@ const uploadMedia = async (req, res) => {
   } catch (error) {
     console.error("uploadMedia error:", error);
 
-    res.status(500).json({
+    // uploadMediaService throws plain Errors for not-found / status-guard /
+    // validation cases — surface those as 400s instead of a blanket 500.
+    if (error.message === "Scholar version not found") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+
+    res.status(400).json({
       success: false,
-      message: "Upload failed",
+      message: error.message || "Upload failed",
     });
   }
 };
@@ -145,17 +83,54 @@ const approveMedia = async (req, res) => {
       });
     }
 
-    const updated = await prisma.media.update({
-      where: {
-        media_id: mediaId,
-      },
-      data: {
-        status: "approved",
-      },
+    if (media.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: "Media is not pending",
+      });
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+
+      // -----------------------------------------
+      // If this is an edited revision, supersede
+      // the original media.
+      // -----------------------------------------
+
+      if (media.previous_media_id) {
+        await tx.media.update({
+          where: {
+            media_id: media.previous_media_id,
+          },
+          data: {
+            status: "superseded",
+          },
+        });
+      }
+
+      // -----------------------------------------
+      // Approve the new revision
+      // -----------------------------------------
+
+      return tx.media.update({
+        where: {
+          media_id: mediaId,
+        },
+        data: {
+          status: "approved",
+        },
+      });
     });
 
+    // -----------------------------------------
+    // Notification
+    // -----------------------------------------
+
     if (media.uploaded_by) {
-      const mediaName = media.title || media.file_name || "media";
+      const mediaName =
+        media.title ||
+        media.file_name ||
+        "media";
 
       await prisma.notifications.create({
         data: {
@@ -169,7 +144,7 @@ const approveMedia = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Media approved",
       data: updated,
@@ -178,17 +153,17 @@ const approveMedia = async (req, res) => {
   } catch (error) {
     console.error("approveMedia error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Server error",
     });
   }
 };
 
+
 // ======================================================
 // Reject Media
 // ======================================================
-
 const rejectMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
   const { reason } = req.body;
@@ -214,23 +189,17 @@ const rejectMedia = async (req, res) => {
       });
     }
 
-    if (media.file_path) {
-      const resourceTypeMap = {
-        pdf: "raw",
-        audio: "video",
-        video: "video",
-      };
-
-      const resource_type = resourceTypeMap[media.file_type] || "raw";
-
-      const urlParts = media.file_path.split("/");
-      const publicIdWithExt = urlParts.slice(-2).join("/");
-      const public_id = publicIdWithExt.replace(/\.[^/.]+$/, "");
-
-      await cloudinary.uploader.destroy(public_id, {
-        resource_type,
-      });
-    }
+    // -----------------------------------------
+    // IMPORTANT:
+    //
+    // Do NOT destroy the file here.
+    //
+    // If this is an edited revision, it may point
+    // to the same Cloudinary file as the original
+    // approved media.
+    //
+    // File cleanup can be handled separately later.
+    // -----------------------------------------
 
     const updated = await prisma.media.update({
       where: {
@@ -241,14 +210,25 @@ const rejectMedia = async (req, res) => {
       },
     });
 
+    // -----------------------------------------
+    // Notification
+    // -----------------------------------------
+
     if (media.uploaded_by) {
-      const mediaName = media.title || media.file_name || "media";
+      const mediaName =
+        media.title ||
+        media.file_name ||
+        "media";
 
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,
           type: "MEDIA_REJECTED",
-          message: `Your media "${mediaName}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+          message:
+            `Your media "${mediaName}" was rejected.` +
+            (reason
+              ? ` Reason: ${reason}`
+              : ""),
           related_entity: `media:${mediaId}`,
           is_read: false,
           created_at: new Date(),
@@ -256,7 +236,7 @@ const rejectMedia = async (req, res) => {
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: "Media rejected",
       data: updated,
@@ -265,17 +245,20 @@ const rejectMedia = async (req, res) => {
   } catch (error) {
     console.error("rejectMedia error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Server error",
     });
   }
 };
-
+ 
 // ======================================================
 // Delete Media
 // ======================================================
 
+// ======================================================
+// Delete Media
+// ======================================================
 const deleteMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
 
@@ -293,14 +276,23 @@ const deleteMedia = async (req, res) => {
       });
     }
 
-    if (media.file_path) {
+    // -----------------------------------------
+    // Delete Cloudinary file ONLY if this is
+    // an original media record.
+    //
+    // A revision may share the same file_path
+    // with its previous approved media.
+    // -----------------------------------------
+
+    if (media.file_path && !media.previous_media_id) {
       const resourceTypeMap = {
         pdf: "raw",
         audio: "video",
         video: "video",
       };
 
-      const resource_type = resourceTypeMap[media.file_type] || "raw";
+      const resource_type =
+        resourceTypeMap[media.file_type] || "raw";
 
       const urlParts = media.file_path.split("/");
       const publicIdWithExt = urlParts.slice(-2).join("/");
@@ -321,7 +313,6 @@ const deleteMedia = async (req, res) => {
       success: true,
       message: "Media deleted",
     });
-
   } catch (error) {
     console.error("deleteMedia error:", error);
 
@@ -411,13 +402,172 @@ const getPendingMedia = async (req, res) => {
 };
 
 
+// ===================================================
+// Update media (metadata / external link only — NOT the uploaded file)
+// ===================================================
+// Editable: title, year, description, and media_url — but only when the
+// media's source_type is "external". If it was created via an uploaded
+// file (source_type "upload"), media_url edits are rejected here; actual
+// file replacement is out of scope for now.
+
+const updateMedia = async (req, res) => {
+  const mediaId = parseInt(req.params.media_id);
+  const userId = req.user.id;
+
+  const {
+    title,
+    year,
+    description,
+    media_url,
+  } = req.body;
+
+  try {
+    // -----------------------------------------
+    // 1. Get existing media
+    // -----------------------------------------
+
+    const media = await prisma.media.findUnique({
+      where: {
+        media_id: mediaId,
+      },
+    });
+
+    if (!media) {
+      return res.status(404).json({
+        success: false,
+        message: "Media not found",
+      });
+    }
+
+    // -----------------------------------------
+    // 2. Permission check
+    // -----------------------------------------
+
+    const user = await prisma.users.findUnique({
+      where: {
+        id: userId,
+      },
+      include: {
+        roles: true,
+      },
+    });
+
+    const isOwner = media.uploaded_by === userId;
+    const isAdmin = user?.roles?.role_name === "admin";
+
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({
+        success: false,
+        message: "Not authorized to edit this media",
+      });
+    }
+
+    // -----------------------------------------
+    // 3. Only approved media can be edited
+    // -----------------------------------------
+
+    if (media.status !== "approved") {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Only approved media can be edited. Pending, rejected, or superseded media cannot be edited.",
+      });
+    }
+
+    // -----------------------------------------
+    // 4. Uploaded files cannot have their URL
+    //    changed because file replacement isn't
+    //    supported yet.
+    // -----------------------------------------
+
+    if (
+      media_url !== undefined &&
+      media.source_type === "upload"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "This media was created from an uploaded file — media_url cannot be set. File replacement is not supported yet.",
+      });
+    }
+
+    // -----------------------------------------
+    // 5. Create a NEW revision
+    // -----------------------------------------
+
+    const newMedia = await prisma.media.create({
+      data: {
+        version_id: media.version_id,
+
+        file_name: media.file_name,
+        file_path: media.file_path,
+
+        media_url:
+          media_url !== undefined
+            ? media_url
+            : media.media_url,
+
+        source_type: media.source_type,
+        file_type: media.file_type,
+
+        title:
+          title !== undefined
+            ? title
+            : media.title,
+
+        year:
+          year !== undefined
+            ? year === null
+              ? null
+              : parseInt(year)
+            : media.year,
+
+        description:
+          description !== undefined
+            ? description
+            : media.description,
+
+        uploaded_by: userId,
+        uploaded_at: new Date(),
+
+        view_count: media.view_count,
+        like_count: media.like_count,
+
+        status: "pending",
+
+        // IMPORTANT
+        previous_media_id: media.media_id,
+      },
+    });
+
+    // -----------------------------------------
+    // 6. Response
+    // -----------------------------------------
+
+    return res.json({
+      success: true,
+      message:
+        "Media edit submitted for review",
+      data: newMedia,
+    });
+
+  } catch (error) {
+    console.error("updateMedia error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
 
 module.exports = {
   uploadMedia,
   approveMedia,
   rejectMedia,
   deleteMedia,
-   getPendingMedia,
+  getPendingMedia,
   getScholarMedia,
-  
+  updateMedia
 };

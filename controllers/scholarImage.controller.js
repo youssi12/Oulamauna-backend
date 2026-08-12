@@ -179,6 +179,9 @@ exports.rejectScholarImage = async (req, res) => {
   }
 };
 
+// ======================================================
+//  pending Scholar Image
+// ======================================================
 
 exports.getPendingScholarImages = async (req, res) => {
   try {

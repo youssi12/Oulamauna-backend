@@ -71,36 +71,35 @@ exports.getPendingEditedScholars = async (req, res) => {
         users: { select: { id: true, username: true, email: true } },
         languages: true,
         scholar_aliases: true,
-        scholar_references: true,
-        regions: true,        // ← added
-        scholar_dates: true,  // ← added
+        regions: true,
+        // no scholar_references, media, scholar_works, scholar_dates here —
+        // a pending edition genuinely owns none of these yet
       },
       orderBy: { created_at: "asc" }
     });
 
-    // For each pending edit, also fetch the current approved version
     const result = await Promise.all(
       pending.map(async (version) => {
-         const currentApproved = await prisma.scholar_versions.findFirst({
-              where: {
-                scholar_id: version.scholar_id,
-                language_id: version.language_id,
-                status: "approved",
-              },
-              include: {
-                scholar_aliases: true,
-                scholar_references: true,
-                regions: true,        // ← added — needed to diff old vs proposed region
-                scholar_dates: true,  // ← added — needed to diff old vs proposed dates
-              },
-              orderBy: {
-                created_at: "desc",
-              },
-            });
+        const currentApproved = await prisma.scholar_versions.findFirst({
+          where: {
+            scholar_id: version.scholar_id,
+            language_id: version.language_id,
+            status: "approved",
+          },
+          include: {
+            scholar_aliases: true,
+            scholar_references: true, // ← real, current references live here
+            regions: true,
+            scholar_dates: true,      // ← and dates
+            media: true,              // ← and media
+            scholar_works: true,      // ← and works
+          },
+          orderBy: { created_at: "desc" },
+        });
 
         return {
           proposed: version,
-          current: currentApproved  // frontend uses this for the left (original) column
+          current: currentApproved
         };
       })
     );
@@ -123,39 +122,69 @@ exports.approveScholar = async (req, res) => {
     });
 
     if (!version) {
-      return res.status(404).json({
-        success: false,
-        message: "Version not found",
-      });
+      return res.status(404).json({ success: false, message: "Version not found" });
     }
 
     if (version.status !== "pending") {
-      return res.status(400).json({
-        success: false,
-        message: "Version is not pending",
-      });
+      return res.status(400).json({ success: false, message: "Version is not pending" });
     }
 
-    // 1. Approve version
-      const updated = await prisma.scholar_versions.update({
-  where: { version_id: versionId },
-  data: { status: "approved" },
-  include: {
-    scholar_aliases: true,
-    scholar_references: true,
-    languages: true,
-    regions: true,        // ← added
-    scholar_dates: true,  // ← added
-    users: {
-      select: {
-        id: true,
-        username: true,
-        email: true,
-      },
-    },
-    scholars: true,
-  },
-});
+    const updated = await prisma.$transaction(async (tx) => {
+      // ── If this is an edit, reassign children from the old approved version ──
+      if (version.version_type === "edition") {
+          const previousApproved = await tx.scholar_versions.findFirst({
+               where: {
+                 scholar_id: version.scholar_id,
+                 language_id: version.language_id,
+                 status: "approved",
+               },
+               orderBy: {
+                 created_at: "desc",
+               },
+               });
+
+        if (previousApproved) {
+          await tx.scholar_dates.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+          await tx.media.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+          await tx.scholar_works.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+          await tx.scholar_references.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+
+          await tx.scholar_versions.update({
+            where: { version_id: previousApproved.version_id },
+            data: { status: "superseded" },
+          });
+        }
+      }
+
+      return tx.scholar_versions.update({
+        where: { version_id: versionId },
+        data: { status: "approved" },
+        include: {
+          scholar_aliases: true,
+          scholar_references: true,
+          languages: true,
+          regions: true,
+          scholar_dates: true,
+          media: true,
+          scholar_works: true,
+          users: { select: { id: true, username: true, email: true } },
+          scholars: true,
+        },
+      });
+    });
+
     // 2. Notify user
     if (version.created_by) {
       await prisma.notifications.create({
@@ -171,149 +200,158 @@ exports.approveScholar = async (req, res) => {
     }
 
     // 3. Promote user to contributor role (if not already)
-
     const contributorRole = await prisma.roles.findFirst({
-      where: {
-        role_name: "contributor",
-      },
-      select: {
-        role_id: true,
-      },
+      where: { role_name: "contributor" },
+      select: { role_id: true },
     });
 
     if (contributorRole && version.created_by) {
       await prisma.users.update({
-        where: {
-          id: version.created_by,
-        },
-        data: {
-          role_id: contributorRole.role_id,
-        },
+        where: { id: version.created_by },
+        data: { role_id: contributorRole.role_id },
       });
     }
 
-    return res.json({
-      success: true,
-      message: "Scholar approved",
-      data: updated,
-    });
-
+    return res.json({ success: true, message: "Scholar approved", data: updated });
   } catch (error) {
     console.error("approveScholar error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
+ 
 exports.rejectScholar = async (req, res) => {
     const versionId = parseInt(req.params.id);
-    const { reason } = req.body;
+    const { reason } = req.body || {};
 
     try {
         const version = await prisma.scholar_versions.findUnique({
-            where: { version_id: versionId },
+            where: {
+                version_id: versionId,
+            },
         });
 
         if (!version) {
             return res.status(404).json({
                 success: false,
-                message: "Version not found"
+                message: "Version not found",
             });
         }
 
         if (version.status !== "pending") {
             return res.status(400).json({
                 success: false,
-                message: "Version is not pending"
+                message: "Version is not pending",
             });
         }
 
         const updated = await prisma.$transaction(async (tx) => {
 
-            // Reject the scholar version
+            // ======================================================
+            // 1. Reject the scholar version
+            // ======================================================
+
             const rejectedVersion = await tx.scholar_versions.update({
-                where: { version_id: versionId },
+                where: {
+                    version_id: versionId,
+                },
                 data: {
                     status: "rejected",
+
+                    // If the image is currently pending,
+                    // reject it together with the scholar version.
+                    // An already-approved image remains untouched.
                     image_status:
-                        version.version_type === "creation"
+                        version.image_status === "pending"
                             ? "rejected"
-                            : undefined
-                }
+                            : version.image_status,
+                },
             });
 
-            // Only cascade rejection for a NEW scholar
-            if (version.version_type === "creation") {
+            // ======================================================
+            // 2. Reject pending child submissions
+            //
+            // IMPORTANT:
+            // Only pending children are rejected.
+            //
+            // Approved children are NEVER touched because they may
+            // belong to the currently live/approved content.
+            // ======================================================
 
-                await tx.scholar_works.updateMany({
-                    where: {
-                        version_id: versionId,
-                        status: "pending"
-                    },
-                    data: {
-                        status: "rejected"
-                    }
-                });
+            await tx.scholar_works.updateMany({
+                where: {
+                    version_id: versionId,
+                    status: "pending",
+                },
+                data: {
+                    status: "rejected",
+                },
+            });
 
-                await tx.scholar_references.updateMany({
-                    where: {
-                        version_id: versionId,
-                        status: "pending"
-                    },
-                    data: {
-                        status: "rejected"
-                    }
-                });
+            await tx.scholar_references.updateMany({
+                where: {
+                    version_id: versionId,
+                    status: "pending",
+                },
+                data: {
+                    status: "rejected",
+                },
+            });
 
-                await tx.media.updateMany({
-                    where: {
-                        version_id: versionId,
-                        status: "pending"
-                    },
-                    data: {
-                        status: "rejected"
-                    }
-                });
-            }
+            await tx.media.updateMany({
+                where: {
+                    version_id: versionId,
+                    status: "pending",
+                },
+                data: {
+                    status: "rejected",
+                },
+            });
 
             return rejectedVersion;
         });
 
-        // Notify contributor
+        // ======================================================
+        // 3. Notify contributor
+        // ======================================================
+
         if (version.created_by) {
             await prisma.notifications.create({
                 data: {
                     user_id: version.created_by,
                     type: "SCHOLAR_REJECTED",
-                    message: `Your scholar submission "${version.canonical_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+                    message:
+                        `Your scholar submission "${version.canonical_name}" was rejected.` +
+                        (reason
+                            ? ` Reason: ${reason}`
+                            : ""),
                     related_entity: `scholar_version:${versionId}`,
                     is_read: false,
                     created_at: new Date(),
-                }
+                },
             });
         }
 
-        res.json({
+        return res.json({
             success: true,
             message: "Scholar rejected",
-            data: updated
+            data: updated,
         });
 
     } catch (error) {
         console.error("rejectScholar error:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             success: false,
-            message: "Server error"
+            message: "Server error",
         });
     }
 };
+ 
 
 
-// get all scholars versions [in a langauge] (this is for admin  )
+
+//! get all scholars versions [in a langauge] (this is for admin  )
 exports.getScholarVersions = async (req, res) => {
   const scholarId = parseInt(req.params.id);
   const { lang } = req.query; // optional: ?lang=ar or ?lang=en

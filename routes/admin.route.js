@@ -28,7 +28,7 @@ const adminOnly = require("../middlewares/admin.middleware");
     router.put("/scholars/:id/approve",scholarManagement.approveScholar);
     router.put("/scholars/:id/reject",scholarManagement.rejectScholar); 
        //*? get all the Vs of a scholar page(u can specify the lang)*/
-    router.get("/scholars/:id/versions",scholarManagement.getScholarVersions);
+//! router.get("/scholars/:id/versions",scholarManagement.getScholarVersions);
     router.get("/scholars/states",scholarManagement.getDashboardStats)
  
 // media management 
@@ -38,7 +38,7 @@ const adminOnly = require("../middlewares/admin.middleware");
     router.delete("/media/:id",   deleteMedia);
 
 // references 
-     router.get("/reference/pending",getPendingReferences)
+    router.get("/reference/pending",getPendingReferences)
     router.put("/reference/:id/approve", approveReference);
     router.put("/reference/:id/reject", rejectReference);
 
@@ -51,9 +51,9 @@ const adminOnly = require("../middlewares/admin.middleware");
     router.put("/img/:id/approve", approveScholarImage);
     router.put("/img/:id/reject", rejectScholarImage);
 
-//  discipline managemnet
-router.put("/discipline/:id",   updateDiscipline);
-router.delete("/discipline/:id",   deleteDiscipline);
+// discipline managemnet
+   router.put("/discipline/:id",   updateDiscipline);
+   router.delete("/discipline/:id",   deleteDiscipline);
 
 
 // regions management

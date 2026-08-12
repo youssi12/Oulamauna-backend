@@ -110,7 +110,7 @@ model languages {
 
  model media {
   media_id      Int               @id @default(autoincrement())
-
+  previous_media_id Int?
   version_id    Int
 
   scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
@@ -265,6 +265,7 @@ model scholar_versions {
   reference_id Int @id @default(autoincrement())
   version_id   Int
   created_by     Int?  
+  previous_reference_id Int?
 
   title        String? @db.VarChar(255)
   citation     String? @db.Text
@@ -385,6 +386,7 @@ model scholar_works {
   work_id        Int                @id @default(autoincrement())
   version_id     Int
   created_by   Int?  
+  previous_work_id Int?
 
   title          String             @db.VarChar(255)
   year           Int?
@@ -433,12 +435,14 @@ enum media_status {
   pending
   approved
   rejected 
+   superseded
 }
 
 enum scholar_versions_status {
   pending
   approved
   rejected
+  superseded
 }
 
  

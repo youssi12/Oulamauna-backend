@@ -9,6 +9,7 @@ const {
   approveMedia,
   rejectMedia,
   deleteMedia,
+  updateMedia
 } = require("../controllers/mediaUpload.controller");
 
 const {
@@ -20,12 +21,9 @@ const protect = require("../middlewares/auth.middleware");
 router.use(protect);
 
 // Upload a file OR submit an external URL
-router.post(
-  "/",
-  uploadMediaMiddleware.single("file"),
-  uploadMedia
-);
-
+router.post( "/",uploadMediaMiddleware.single("file"), uploadMedia);
+// Update metadata
+router.put("/:media_id",updateMedia);
 // Get approved media for a scholar
 router.get("/:version_id", getScholarMedia);
 

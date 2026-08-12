@@ -11,7 +11,7 @@ router.post("/",uploadScholarBundle.any(), scholarPage.createScholar);
 
 // Read
 router.get("/", scholarPage.getPublishedScholars);          // List + filters
-router.get("/search", scholarPage.getScholarByName);        // Search by name/alias
+router.get("/name", scholarPage.getScholarByName);        // Search by name/alias
 router.get("/my-submissions", scholarPage.getMySubmissions);
 router.get("/:id", scholarPage.getScholarById);             // Single scholar
 

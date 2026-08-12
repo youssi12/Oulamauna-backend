@@ -1,8 +1,5 @@
 const prisma = require("../config/db");
 
-// ===================================================
-// Shared validation helpers
-// ===================================================
 
 const VALID_DATE_TYPES = ["birth", "death"];
 const VALID_CALENDARS = ["hijri", "gregorian"];
@@ -27,7 +24,7 @@ function validateCalendar(calendar) {
   return null;
 }
 
-// Returns { error, value } — value is the parsed int (or null if omitted)
+ 
 function validateYear(year) {
   if (year === undefined || year === null || year === "") {
     return { error: null, value: null };
