@@ -12,10 +12,11 @@ const {
 
 const protect = require("../middlewares/auth.middleware");
 
-// ── Public read ──
-router.get("/:version_id", getScholarDates);
+ 
+
 
 // ── Writes require login (ownership/admin enforced in controller) ──
+router.get("/:version_id",protect, getScholarDates);
 router.post("/", protect, createDate);
 router.put("/:id", protect, updateDate);
 router.delete("/:id", protect, deleteDate);

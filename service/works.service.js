@@ -1,4 +1,26 @@
 const prisma = require("../config/db");
+const WORK_FORMATS = new Set([
+  "BOOK",
+  "ARTICLE",
+  "TREATISE",
+  "MANUSCRIPT",
+  "LECTURE",
+  "SERMON",
+  "FATWA",
+  "POEM",
+  "LETTER",
+  "COMMENTARY",
+  "TRANSLATION",
+  "RESEARCH",
+  "COURSE",
+  "DEVICE",
+  "INVENTION",
+  "SOFTWARE",
+  "MAP",
+  "OTHER",
+]);
+
+
 
 exports.createWorkService = async ({
   version_id,
@@ -10,6 +32,12 @@ exports.createWorkService = async ({
   file,
   created_by,
 }) => {
+
+   if (!WORK_FORMATS.has(format)) {
+  throw new Error(
+    `Invalid work format. Allowed formats: ${[...WORK_FORMATS].join(", ")}`
+  );
+} 
   const version = await prisma.scholar_versions.findUnique({
     where: {
       version_id: parseInt(version_id),
@@ -20,8 +48,8 @@ exports.createWorkService = async ({
     throw new Error("Scholar version not found");
   }
 
-  if (version.status === "superseded") {
-    throw new Error("This version has been superseded — use the currently approved version_id.");
+  if (version.status === "superseded" || version.status === "rejected") {
+    throw new Error("This version has been superseded or rejected — use the currently approved version_id.");
   }
   if (version.status === "pending" && version.version_type === "edition") {
     throw new Error("This version is a pending edit with no content of its own yet — use the currently approved version_id.");

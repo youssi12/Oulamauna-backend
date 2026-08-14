@@ -29,23 +29,22 @@ exports.createReference = async (req, res) => {
       message: "Reference added",
       data: reference,
     });
-  } catch (error) {
-    console.error("createReference error:", error);
+  } 
+   catch (error) {
+  console.error("createReference error:", error);
 
-    // createReferenceService throws plain Errors for "not found" / validation —
-    // surface those as 400s instead of a generic 500 where it makes sense.
-    if (error.message === "Scholar version not found") {
-      return res.status(404).json({ success: false, message: error.message });
-    }
-    if (error.message.startsWith("At least one of")) {
-      return res.status(400).json({ success: false, message: error.message });
-    }
-
-    return res.status(500).json({
+  if (error.message === "Scholar version not found") {
+    return res.status(404).json({
       success: false,
-      message: "Server error",
+      message: error.message,
     });
   }
+
+  return res.status(400).json({
+    success: false,
+    message: error.message || "Reference creation failed",
+  });
+}
 };
 
 // ===================================================
@@ -56,10 +55,15 @@ exports.getScholarReferences = async (req, res) => {
   const versionId = parseInt(req.params.version_id);
 
   try {
-    const references = await prisma.scholar_references.findMany({
-      where: { version_id: versionId },
-      orderBy: { reference_id: "asc" },
-    });
+     const references = await prisma.scholar_references.findMany({
+  where: {
+    version_id: versionId,
+    status: "approved",
+  },
+  orderBy: {
+    reference_id: "asc",
+  },
+});
 
     res.json({
       success: true,
@@ -197,7 +201,7 @@ exports.deleteReference = async (req, res) => {
       include: { roles: true },
     });
 
-    const isOwner = reference.scholar_versions.created_by === userId;
+    const isOwner = reference.created_by === userId;
     const isAdmin = user?.roles?.role_name === "admin";
 
     if (!isOwner && !isAdmin) {
@@ -392,14 +396,22 @@ exports.getPendingReferences = async (req, res) => {
       where: {
         status: "pending",
       },
-      include: {
-        scholar_versions: {
-          include: {
-            scholars: true,
-            languages: true,
-          },
-        },
-      },
+       include: {
+  scholar_versions: {
+    include: {
+      scholars: true,
+      languages: true,
+    },
+  },
+
+  users: {
+    select: {
+      id: true,
+      username: true,
+      email: true,
+    },
+  },
+},
       orderBy: {
         reference_id: "asc",
       },

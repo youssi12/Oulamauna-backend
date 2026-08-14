@@ -16,7 +16,7 @@ exports.createWork = async (req, res) => {
     
   } = req.body;
 
- console.log("hi working")
+ 
 
   if (!version_id || !title || !format) {
     return res.status(400).json({
@@ -47,13 +47,20 @@ exports.createWork = async (req, res) => {
       data: work,
     });
 
-  } catch (error) {
-    console.error(error);
+  }   catch (error) {
+  console.error("createWork error:", error);
 
-    res.status(500).json({
+  if (error.message === "Scholar version not found") {
+    return res.status(404).json({
       success: false,
       message: error.message,
     });
+  }
+
+  return res.status(400).json({
+    success: false,
+    message: error.message || "Work creation failed",
+  });
   }
 };
 // ======================================================
@@ -236,23 +243,32 @@ exports.rejectWork = async (req, res) => {
 // ======================================================
 exports.getPendingWorks = async (req, res) => {
   try {
-    const pending = await prisma.scholar_works.findMany({
-      where: {
-        status: "pending",
-      },
-      include: {
-        scholar_versions: {
-          include: {
-            scholars: true,
-            languages: true,
-          },
-        },
-      },
-      orderBy: {
-        work_id: "asc",
-      },
-    });
+     const pending = await prisma.scholar_works.findMany({
+  where: {
+    status: "pending",
+  },
 
+  include: {
+    scholar_versions: {
+      include: {
+        scholars: true,
+        languages: true,
+      },
+    },
+
+    users: {
+      select: {
+        id: true,
+        username: true,
+        email: true,
+      },
+    },
+  },
+
+  orderBy: {
+    work_id: "asc",
+  },
+});
     res.json({
       success: true,
       data: pending,
@@ -427,6 +443,41 @@ exports.getPendingWorks = async (req, res) => {
 
   } catch (error) {
     console.error("updateWork error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+    });
+  }
+};
+
+
+
+// ======================================================
+// Get Approved Works for a Version
+// ======================================================
+
+exports.getScholarWorks = async (req, res) => {
+  const versionId = parseInt(req.params.version_id);
+
+  try {
+    const works = await prisma.scholar_works.findMany({
+      where: {
+        version_id: versionId,
+        status: "approved",
+      },
+      orderBy: {
+        year: "desc",
+      },
+    });
+
+    return res.json({
+      success: true,
+      data: works,
+    });
+
+  } catch (error) {
+    console.error("getScholarWorks error:", error);
 
     return res.status(500).json({
       success: false,

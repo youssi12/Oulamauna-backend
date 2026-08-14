@@ -27,8 +27,8 @@ exports.uploadMediaService = async ({
   // A "pending" version of type "creation" IS allowed — that's the initial
   // submission flow (createScholar attaching works/media/refs/image before
   // the whole thing is ever approved).
-  if (version.status === "superseded") {
-    throw new Error("This version has been superseded — use the currently approved version_id.");
+  if (version.status === "superseded" || version.status === "rejected") {
+    throw new Error("This version has been superseded or rejected — use the currently approved version_id.");
   }
   if (version.status === "pending" && version.version_type === "edition") {
     throw new Error("This version is a pending edit with no content of its own yet — use the currently approved version_id.");

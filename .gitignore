@@ -1,7 +1,19 @@
+# Dependencies
 node_modules/
+
+# Environment / secrets
 .env
+.env.*
+!.env.example
+
+# Generated Prisma Client
+/generated/prisma/
+
+# Personal notes
 impnote.md
 
-docs
-/generated/prisma
+# Documentation (only if you intentionally don't want docs in Git)
+docs/
 
+# Local/database backups
+*.sql

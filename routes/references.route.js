@@ -11,13 +11,11 @@ const {
 } = require("../controllers/references.controller");
 
 const protect = require("../middlewares/auth.middleware");
-
-// //? ── Public read ──
-router.get("/:version_id", getScholarReferences);
-
-// ── Writes require login (ownership/admin enforced in controller) ──
+ 
+router.get("/:version_id",protect,getScholarReferences);
 router.post("/", protect, createReference);
 router.put("/:id", protect, updateReference);
 router.delete("/:id", protect, deleteReference);
+
 
 module.exports = router;

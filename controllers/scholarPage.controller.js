@@ -401,6 +401,13 @@ if (!language_id) {
     const sideEffectErrors = [];
  
     // ── Profile image ──
+    // FIX: uploadScholarImageService now writes to the independent
+    // img_versions table and requires `uploaded_by` (it throws
+    // "uploaded_by is required" without it). That was missing here,
+    // which meant every scholar-creation-with-image call silently
+    // failed and got swallowed into `sideEffectErrors` below — the
+    // scholar was created but the image never attached, with no loud
+    // error anywhere. Added `uploaded_by: userId` to fix that.
     let imageResult = null;
     const imageFile = filesByField["image"];
     if (imageFile) {
@@ -408,6 +415,7 @@ if (!language_id) {
         imageResult = await uploadScholarImageService({
           version_id: version.version_id,
           file: imageFile,
+          uploaded_by: userId,
         });
       } catch (err) {
         sideEffectErrors.push({ type: "image", message: err.message });
@@ -501,12 +509,21 @@ if (!language_id) {
       });
     }
  
+    // FIX: `data.version` used to be `imageResult || version`. That
+    // worked when uploadScholarImageService returned a scholar_versions
+    // row, but it now returns an img_versions row instead (different
+    // shape entirely — img_version_id/image_url/status/uploaded_by,
+    // not canonical_name/biography/etc). Whether an image file was
+    // attached used to silently change the shape of `data.version` —
+    // `version` is now always the scholar_versions row, and the image
+    // submission (if any) gets its own `image` key.
     res.status(201).json({
       success: true,
       message: scholar_id ? "New language version submitted for review" : "Scholar submitted for review",
       data: {
         scholar,
-        version: imageResult || version,
+        version,
+        image: imageResult || null,
         works: workResults,
         media: mediaResults,
         references: referenceResults,
@@ -610,6 +627,10 @@ exports.getPublishedScholars = async (req, res) => {
     // ── Mask unapproved images — the one field not covered by a
     // nested `where` filter, since it's a scalar column, not a
     // related table like media/works/references. ──
+    // NOTE: this still reads correctly under the img_versions change,
+    // since approveScholarImage keeps image_url/image_status on
+    // scholar_versions in sync as a cache of the approved img_versions
+    // row — no change needed here.
     const shaped = scholars.map((scholar) => {
       const version = scholar.scholar_versions[0];
       if (version && version.image_status !== "approved") {
@@ -741,6 +762,7 @@ exports.getScholarById = async (req, res) => {
     // ── Mask an unapproved image — image_url/image_status are scalar
     // columns on scholar_versions, not a related table, so they can't
     // be filtered via `where` inside the include like media/works/refs. ──
+    // NOTE: still correct under img_versions, same reasoning as above.
     if (currentVersion.image_status !== "approved") {
       currentVersion.image_url = null;
     }
@@ -1010,11 +1032,29 @@ exports.getScholarById = async (req, res) => {
 
           biography: finalBiography,
 
-          // Image is carried forward by reference (same url/status) until
-          // an independent image edit flow replaces it — not cloned as a
-          // new file, just pointing at the same existing one for now.
-          image_url: previousVersion.image_url,
-          image_status: previousVersion.image_status,
+          // FIX: previously copied previousVersion.image_url/image_status
+          // here as a one-time snapshot at edit-submission time. Under the
+          // img_versions design, scholar_versions.image_url is supposed to
+          // always reflect "whichever img_versions proposal is currently
+          // approved" — but a snapshot taken now goes stale the moment
+          // someone gets a *new* image proposal approved against the old
+          // (still-live) previousVersion while this edit sits pending,
+          // since that approval writes to previousVersion's row, not this
+          // one. Deliberately leaving image_url/image_status/
+          // image_uploaded_by unset here (null) rather than copying a
+          // value that can silently rot. This pending edition has no
+          // public visibility anyway (only approved versions are ever
+          // read), so there's nothing lost by leaving it empty in the
+          // meantime.
+          //
+          // REQUIRED: approveScholar() must, at the moment THIS edition is
+          // approved, re-read previousVersion's live image_url/
+          // image_status/image_uploaded_by (fresh query, not a cached
+          // value) and copy those onto this version then — the same way
+          // it presumably reassigns works/media/references/dates. That
+          // guarantees whatever image was actually approved-and-current
+          // on the old version at approval time is what carries over,
+          // regardless of when it was approved relative to this edit.
 
           version_type: "edition",
           status: "pending",
@@ -1102,7 +1142,13 @@ exports.getMySubmissions = async (req, res) => {
   const userId = req.user.id;
 
   try {
-    const [versions, works, media, references] = await Promise.all([
+    // FIX: added img_versions to the Promise.all — images are now their
+    // own independently-tracked submission (own uploaded_by + status),
+    // same category as works/media/references, so they belong on the
+    // contributor's own dashboard too. Previously omitted entirely,
+    // meaning a contributor had no way to see their pending/rejected
+    // image submissions here.
+    const [versions, works, media, references, images] = await Promise.all([
       prisma.scholar_versions.findMany({
         where: { created_by: userId },
         include: { scholars: true, languages: true },
@@ -1123,6 +1169,11 @@ exports.getMySubmissions = async (req, res) => {
         include: { scholar_versions: { include: { scholars: true } } },
         orderBy: { reference_id: "desc" },
       }),
+      prisma.img_versions.findMany({
+        where: { uploaded_by: userId },
+        include: { scholar_versions: { include: { scholars: true } } },
+        orderBy: { created_at: "desc" },
+      }),
     ]);
 
     res.json({
@@ -1132,6 +1183,7 @@ exports.getMySubmissions = async (req, res) => {
         works,
         media,
         references,
+        images,
       },
     });
   } catch (error) {

@@ -6,86 +6,140 @@ const prisma = require("../config/db");
 // upload Scholar Image
 // ======================================================
 
-exports.uploadScholarImage = async (req, res) => {
+ exports.uploadScholarImage = async (req, res) => {
+  const userId = req.user.id;
+
   try {
+    const user = await prisma.users.findUnique({
+      where: {
+        id: userId,
+      },
+    });
+
+    if (!user || !user.allowed_to_contribute) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not allowed to contribute",
+      });
+    }
+    
+
     const { version_id } = req.body;
 
     const version = await uploadScholarImageService({
       version_id,
       file: req.file,
+      uploaded_by: userId,
     });
+    console.log("i am testing version",version)
 
-    res.status(200).json({
+    
+    return res.status(201).json({
       success: true,
       data: version,
     });
+
   } catch (error) {
     console.error("uploadScholarImage error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message,
     });
   }
 };
-
 // ======================================================
 // Approve Scholar Image
 // ======================================================
 
-exports.approveScholarImage = async (req, res) => {
-  const versionId = parseInt(req.params.id);
+ exports.approveScholarImage = async (req, res) => {
+  const imageVersionId = parseInt(req.params.id);
 
   try {
-    const version = await prisma.scholar_versions.findUnique({
+    const imageVersion = await prisma.img_versions.findUnique({
       where: {
-        version_id: versionId,
+        img_version_id: imageVersionId,
+      },
+      include: {
+        scholar_versions: true,
       },
     });
 
-    if (!version) {
+    if (!imageVersion) {
       return res.status(404).json({
         success: false,
-        message: "Scholar version not found",
+        message: "Image version not found",
       });
     }
 
-    if (!version.image_url) {
-      return res.status(400).json({
-        success: false,
-        message: "This scholar version has no image",
-      });
-    }
-
-    if (version.image_status !== "pending") {
+    if (imageVersion.status !== "pending") {
       return res.status(400).json({
         success: false,
         message: "Image is not pending",
       });
     }
 
-    const updated = await prisma.scholar_versions.update({
-      where: {
-        version_id: versionId,
-      },
-      data: {
-        image_status: "approved",
-      },
-    });
+    const updated = await prisma.$transaction(async (tx) => {
 
-    // Notify the contributor
-    if (version.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: version.created_by,
-          type: "IMAGE_APPROVED",
-          message: `The image for "${version.canonical_name}" has been approved.`,
-          related_entity: `scholar_version:${versionId}`,
-          is_read: false,
-          created_at: new Date(),
+      // Find the currently approved image submission, if one exists
+      const currentApproved = await tx.img_versions.findFirst({
+        where: {
+          version_id: imageVersion.version_id,
+          status: "approved",
         },
       });
-    }
+
+      // Previous approved image becomes superseded
+      if (currentApproved) {
+        await tx.img_versions.update({
+          where: {
+            img_version_id: currentApproved.img_version_id,
+          },
+          data: {
+            status: "superseded",
+          },
+        });
+      }
+
+      // Approve this image
+      const approvedImage = await tx.img_versions.update({
+        where: {
+          img_version_id: imageVersionId,
+        },
+        data: {
+          status: "approved",
+        },
+      });
+
+      // Update the scalar/current image
+      const updatedVersion = await tx.scholar_versions.update({
+        where: {
+          version_id: imageVersion.version_id,
+        },
+        data: {
+          image_url: imageVersion.image_url,
+          image_status: "approved",
+          image_uploaded_by: imageVersion.uploaded_by,
+        },
+      });
+
+      return {
+        approvedImage,
+        updatedVersion,
+      };
+    });
+
+    // Notify the actual uploader
+    await prisma.notifications.create({
+      data: {
+        user_id: imageVersion.uploaded_by,
+        type: "IMAGE_APPROVED",
+        message: `The image for "${imageVersion.scholar_versions.canonical_name}" has been approved.`,
+        related_entity: `image_version:${imageVersionId}`,
+        is_read: false,
+        created_at: new Date(),
+      },
+    });
 
     return res.json({
       success: true,
@@ -108,65 +162,59 @@ exports.approveScholarImage = async (req, res) => {
 // Reject Scholar Image
 // ======================================================
 
-exports.rejectScholarImage = async (req, res) => {
-  const versionId = parseInt(req.params.id);
-  const { reason } = req.body;
+ exports.rejectScholarImage = async (req, res) => {
+  const imageVersionId = parseInt(req.params.id);
+  const { reason } = req.body || {};
 
   try {
-    const version = await prisma.scholar_versions.findUnique({
+    const imageVersion = await prisma.img_versions.findUnique({
       where: {
-        version_id: versionId,
+        img_version_id: imageVersionId,
+      },
+      include: {
+        scholar_versions: true,
       },
     });
 
-    if (!version) {
+    if (!imageVersion) {
       return res.status(404).json({
         success: false,
-        message: "Scholar version not found",
+        message: "Image version not found",
       });
     }
 
-    if (!version.image_url) {
-      return res.status(400).json({
-        success: false,
-        message: "This scholar version has no image",
-      });
-    }
-
-    if (version.image_status !== "pending") {
+    if (imageVersion.status !== "pending") {
       return res.status(400).json({
         success: false,
         message: "Image is not pending",
       });
     }
 
-    const updated = await prisma.scholar_versions.update({
+    const updated = await prisma.img_versions.update({
       where: {
-        version_id: versionId,
+        img_version_id: imageVersionId,
       },
       data: {
-        image_status: "rejected",
+        status: "rejected",
       },
     });
 
-    // Notify the contributor
-    if (version.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: version.created_by,
-          type: "IMAGE_REJECTED",
-          message: `The image for "${version.canonical_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
-          related_entity: `scholar_version:${versionId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
-      });
-    }
+    await prisma.notifications.create({
+      data: {
+        user_id: imageVersion.uploaded_by,
+        type: "IMAGE_REJECTED",
+        message: `The image for "${imageVersion.scholar_versions.canonical_name}" was rejected.${reason ? ` Reason: ${reason}` : ""}`,
+        related_entity: `image_version:${imageVersionId}`,
+        is_read: false,
+        created_at: new Date(),
+      },
+    });
 
     return res.json({
       success: true,
       message: "Scholar image rejected",
       data: updated,
+      reason: reason || null,
     });
 
   } catch (error) {
@@ -185,17 +233,20 @@ exports.rejectScholarImage = async (req, res) => {
 
 exports.getPendingScholarImages = async (req, res) => {
   try {
-    const pending = await prisma.scholar_versions.findMany({
+    const pending = await prisma.img_versions.findMany({
       where: {
-        image_status: "pending",
-        image_url: {
-          not: null,
-        },
+        status: "pending",
       },
+
       include: {
-        scholars: true,
-        languages: true,
-        regions: true,
+        scholar_versions: {
+          include: {
+            scholars: true,
+            languages: true,
+            regions: true,
+          },
+        },
+
         users: {
           select: {
             id: true,
@@ -204,19 +255,21 @@ exports.getPendingScholarImages = async (req, res) => {
           },
         },
       },
+
       orderBy: {
         created_at: "asc",
       },
     });
 
-    res.json({
+    return res.json({
       success: true,
       data: pending,
     });
+
   } catch (error) {
     console.error("getPendingScholarImages error:", error);
 
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: "Server error",
     });

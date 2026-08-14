@@ -227,39 +227,68 @@ model scholar_versions {
   version_id          Int                      @id @default(autoincrement())
   scholar_id          Int?
   language_id         Int?
-  canonical_name      String?    @db.VarChar(255)
-   
-  region_id                  Int?                    
-  regions                    regions?                 @relation(fields: [region_id], references: [region_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_4")
+  canonical_name      String?                  @db.VarChar(255)
 
-   century_hijri_start     Int?
+  region_id           Int?
+  regions             regions?                @relation(fields: [region_id], references: [region_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_4")
+
+  century_hijri_start     Int?
   century_hijri_end       Int?
   century_gregorian_start Int?
   century_gregorian_end   Int?
-  biography           String?                  @db.Text
+  biography               String?              @db.Text
+
+  // CURRENT APPROVED IMAGE
   image_url           String?                  @db.VarChar(500)
-  image_status media_status?
+  image_status        media_status?
+
+  // Who uploaded the currently stored image
+  image_uploaded_by   Int?
+
   status              scholar_versions_status?
   created_by          Int?
   created_at          DateTime?                @db.Timestamp(0)
+
   internal_links      internal_links[]
-  version_type  scholar_versions_type @default(creation)
+  version_type        scholar_versions_type     @default(creation)
   scholar_aliases     scholar_aliases[]
+
   scholars            scholars?                @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
   languages           languages?               @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
   users               users?                   @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
+
   scholar_references scholar_references[]
-  scholar_works scholar_works[]
-  media media[]
-  scholar_dates scholar_dates[]
+  scholar_works      scholar_works[]
+  media              media[]
+  scholar_dates      scholar_dates[]
+
+  img_versions       img_versions[]
 
   @@index([created_by], map: "created_by")
   @@index([language_id], map: "language_id")
-  @@index([scholar_id], map: "scholar_id") 
+  @@index([scholar_id], map: "scholar_id")
   @@index([region_id], map: "region_id")
 }
 
 
+model img_versions {
+  img_version_id Int @id @default(autoincrement())
+
+  version_id    Int
+  image_url     String       @db.VarChar(500)
+
+  status        media_status @default(pending)
+
+  uploaded_by   Int
+  created_at    DateTime?    @db.Timestamp(0)
+
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction)
+  users            users            @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([version_id])
+  @@index([uploaded_by])
+  @@index([status])
+}
 
  model scholar_references {
   reference_id Int @id @default(autoincrement())
@@ -320,6 +349,7 @@ model users {
   scholar_versions     scholar_versions[]
   scholars             scholars[]
   scholar_works       scholar_works[]
+  img_versions        img_versions[]
   scholar_references  scholar_references[]
   roles                roles?                 @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction, map: "users_ibfk_1")
 

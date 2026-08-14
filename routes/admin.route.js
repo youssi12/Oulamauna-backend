@@ -6,7 +6,7 @@ const { approveMedia,rejectMedia,deleteMedia,getPendingMedia} = require("../cont
 const scholarManagement = require("../controllers/scholarManagement.controller")
 const {updateRegion,deleteRegion,} = require("../controllers/region.controller");
 const {updateDiscipline,deleteDiscipline} = require("../controllers/discipline.controller");
-const {approveReference,rejectReference,getPendingReferences,} = require("../controllers/references.controller")
+const {approveReference,rejectReference,getPendingReferences} = require("../controllers/references.controller")
 const {approveWork,rejectWork,getPendingWorks} = require("../controllers/works.controller")
 const {approveScholarImage,rejectScholarImage,getPendingScholarImages} = require("../controllers/scholarImage.controller")
 
@@ -40,7 +40,7 @@ const adminOnly = require("../middlewares/admin.middleware");
 // references 
     router.get("/reference/pending",getPendingReferences)
     router.put("/reference/:id/approve", approveReference);
-    router.put("/reference/:id/reject", rejectReference);
+    router.put("/reference/:id/reject", rejectReference); 
 
 // works 
     router.get("/work/pending",getPendingWorks)
