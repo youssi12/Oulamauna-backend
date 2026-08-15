@@ -5,7 +5,7 @@ const scholarPage= require("../controllers/scholarPage.controller");
 
 // middleware
    const protect = require("../middlewares/auth.middleware");
-   router.use(protect)
+   
 
 
 
