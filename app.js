@@ -15,7 +15,8 @@ const app = express();
   credentials: true
 }));
 app.use(express.json())
-app.use(cookieParser()); // ← add this
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser()); 
 
 
 // ROUTES
@@ -23,7 +24,12 @@ app.use('/api/auth',require("./routes/auth.route"));
 app.use("/api/admin",require("./routes/admin.route"));
 app.use("/api/scholars",require("./routes/scholar.route")) 
 app.use("/api/media",require("./routes/media.route"));
- 
+app.use("/api/work",require("./routes/works.route"))
+app.use("/api/reference",require("./routes/references.route"))
+app.use("/api/img",require("./routes/scholarImage.route"))
+app.use("/api/discipline",require("./routes/discipline.route"))
+app.use("/api/region",require("./routes/regions.route"))
+app.use("/api/date",require("./routes/dates.route"))
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {

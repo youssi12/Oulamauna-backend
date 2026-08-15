@@ -1,20 +1,21 @@
-const express = require("express");
+ const express = require("express");
 const router = express.Router();
 
-const scholarPage= require("../controllers/scholarPage.controller");
+const scholarPage = require("../controllers/scholarPage.controller");
+const protect = require("../middlewares/auth.middleware");
+const { uploadScholarBundle } = require("../config/cloudinary");
+router.use(protect);
 
-// middleware
-   const protect = require("../middlewares/auth.middleware");
-   
+// Create
+router.post("/",uploadScholarBundle.any(), scholarPage.createScholar);
 
+// Read
+router.get("/", scholarPage.getPublishedScholars);          // List + filters
+router.get("/name", scholarPage.getScholarByName);        // Search by name/alias
+router.get("/my-submissions", scholarPage.getMySubmissions);
+router.get("/:id", scholarPage.getScholarById);             // Single scholar
 
-
-// routes
-   router.post("/",scholarPage.createScholar)
-   router.get("/",scholarPage.getPublishedScholars);//alwyas give it langugae 
-   router.get("/my-submissions",scholarPage.getMySubmissions);
-   router.get("/:id", scholarPage.getScholarById); 
-   router.put("/:id", scholarPage.editScholar)
-   
+// Update
+router.patch("/:id", scholarPage.editScholar);
 
 module.exports = router;
