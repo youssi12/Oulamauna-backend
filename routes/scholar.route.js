@@ -4,7 +4,7 @@ const router = express.Router();
 const scholarPage = require("../controllers/scholarPage.controller");
 const protect = require("../middlewares/auth.middleware");
 const { uploadScholarBundle } = require("../config/cloudinary");
-router.use(protect);
+
 
 // Create
 router.post("/",uploadScholarBundle.any(), scholarPage.createScholar);

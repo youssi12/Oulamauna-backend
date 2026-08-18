@@ -49,18 +49,19 @@ model blog_posts {
   @@index([author_id], map: "author_id")
 }
 
+// NEW
 model comments {
-  comment_id Int       @id @default(autoincrement())
-  scholar_id Int?
-  user_id    Int?
-  content    String?   @db.Text
-  created_at DateTime? @db.Timestamp(0)
-  edited_at  DateTime? @db.Timestamp(0)
-  deleted_at DateTime? @db.Timestamp(0)
-  scholars   scholars? @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "comments_ibfk_1")
-  users      users?    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "comments_ibfk_2")
+  comment_id       Int               @id @default(autoincrement())
+  version_id       Int?
+  user_id          Int?
+  content          String?           @db.Text
+  created_at       DateTime?         @db.Timestamp(0)
+  edited_at        DateTime?         @db.Timestamp(0)
+  deleted_at       DateTime?         @db.Timestamp(0)
+  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: Cascade, map: "comments_ibfk_1")
+  users            users?            @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "comments_ibfk_2")
 
-  @@index([scholar_id], map: "scholar_id")
+  @@index([version_id], map: "version_id")
   @@index([user_id], map: "user_id")
 }
 
@@ -201,14 +202,16 @@ model scholar_contributors {
   @@index([user_id], map: "user_id")
 }
 
+// NEW
 model scholar_disciplines {
-  scholar_id    Int
+  version_id    Int
   discipline_id Int
-  disciplines   disciplines @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_1")
-  scholars      scholars    @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_2")
+  disciplines      disciplines      @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_1")
+  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade, map: "scholar_disciplines_ibfk_2")
 
-  @@id([scholar_id, discipline_id])
+  @@id([version_id, discipline_id])
   @@index([discipline_id], map: "discipline_id")
+  @@index([version_id], map: "version_id")
 }
 
 model scholar_relationships {
@@ -261,6 +264,8 @@ model scholar_versions {
   scholar_works      scholar_works[]
   media              media[]
   scholar_dates      scholar_dates[]
+  scholar_disciplines scholar_disciplines[]
+  comments            comments[]
 
   img_versions       img_versions[]
 
@@ -312,11 +317,9 @@ model scholars {
   created_by                                                               Int?
   created_at                                                               DateTime?               @db.Timestamp(0)
   bibliography                                                             bibliography[]
-  comments                                                                 comments[]
   internal_links                                                           internal_links[]
   
   scholar_contributors                                                     scholar_contributors[]
-  scholar_disciplines                                                      scholar_disciplines[]
   scholar_relationships_scholar_relationships_scholar_idToscholars         scholar_relationships[] @relation("scholar_relationships_scholar_idToscholars")
   scholar_relationships_scholar_relationships_related_scholar_idToscholars scholar_relationships[] @relation("scholar_relationships_related_scholar_idToscholars")
   scholar_versions                                                         scholar_versions[]

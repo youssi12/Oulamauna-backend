@@ -372,9 +372,15 @@ if (!language_id) {
         });
       }
  
-      if (!scholar_id && discipline_ids && discipline_ids.length > 0) {
+      // CHANGED: disciplines are now version-scoped, like aliases/dates —
+      // they used to live on `scholar_id` and were only written on first
+      // creation (`!scholar_id`). A discipline tag is language/version
+      // content (a French version of a scholar can be tagged differently
+      // than the Arabic one), so it's written on every submission now,
+      // not gated behind "only if this is a brand new scholar".
+      if (discipline_ids && discipline_ids.length > 0) {
         await tx.scholar_disciplines.createMany({
-          data: discipline_ids.map((did) => ({ scholar_id: scholar.scholar_id, discipline_id: did })),
+          data: discipline_ids.map((did) => ({ version_id: version.version_id, discipline_id: did })),
           skipDuplicates: true,
         });
       }
@@ -540,7 +546,7 @@ if (!language_id) {
 
 exports.getPublishedScholars = async (req, res) => {
   const {
-    lang = "1",
+    lang, // Removed the default "1" so we can check if it's an ID or a code
     region,
     century,
     century_calendar = "gregorian",
@@ -548,19 +554,34 @@ exports.getPublishedScholars = async (req, res) => {
   } = req.query;
 
   try {
+    // 1. Safely find the language (handles both ID and Code)
+    let languageWhere = {};
+    
+    if (lang) {
+      const parsedLang = Number(lang);
+      // If it's a valid number, search by ID. Otherwise, search by code.
+      if (!isNaN(parsedLang)) {
+        languageWhere.language_id = parsedLang;
+      } else {
+        languageWhere.code = lang; 
+      }
+    } else {
+      // Default to language_id 1 if nothing is passed in the URL
+      languageWhere.language_id = 1; 
+    }
+
     const language = await prisma.languages.findFirst({
-      where: {
-        language_id: Number(lang),
-      },
+      where: languageWhere,
     });
 
     if (!language) {
       return res.status(404).json({
         success: false,
-        message: `Language '${lang}' not found`,
+        message: `Language '${lang || 'default'}' not found`,
       });
     }
 
+    // 2. Build the filters
     const versionWhere = {
       status: "approved",
       language_id: language.language_id,
@@ -584,14 +605,12 @@ exports.getPublishedScholars = async (req, res) => {
       }
     }
 
-    const scholarWhere = {
-      scholar_versions: {
-        some: versionWhere,
-      },
-    };
-
+    // CHANGED: discipline now filters on the version (scholar_disciplines
+    // is keyed by version_id), not on the scholar directly — a discipline
+    // tag can differ per language version, so it has to be part of
+    // versionWhere, same as region/century.
     if (discipline) {
-      scholarWhere.scholar_disciplines = {
+      versionWhere.scholar_disciplines = {
         some: {
           discipline_id: {
             in: discipline.split(",").map(Number),
@@ -600,9 +619,15 @@ exports.getPublishedScholars = async (req, res) => {
       };
     }
 
+    const scholarWhere = {
+      scholar_versions: {
+        some: versionWhere,
+      },
+    };
+
+    // 3. Fetch scholars
     const scholars = await prisma.scholars.findMany({
       where: scholarWhere,
-
       include: {
         scholar_versions: {
           where: versionWhere,
@@ -614,23 +639,21 @@ exports.getPublishedScholars = async (req, res) => {
             regions: true,
             scholar_dates: true,
             scholar_references: { where: { status: "approved" } },
-            media: { where: { status: "approved" } },
-            scholar_works: { where: { status: "approved" } },
+media: {
+  where: { status: "approved" },
+  include: { users: { select: { id: true, username: true } } },
+},
+scholar_works: {
+  where: { status: "approved" },
+  include: { users: { select: { id: true, username: true } } },
+},
+            scholar_disciplines: { include: { disciplines: true } },
           },
-        },
-        scholar_disciplines: {
-          include: { disciplines: true },
         },
       },
     });
 
-    // ── Mask unapproved images — the one field not covered by a
-    // nested `where` filter, since it's a scalar column, not a
-    // related table like media/works/references. ──
-    // NOTE: this still reads correctly under the img_versions change,
-    // since approveScholarImage keeps image_url/image_status on
-    // scholar_versions in sync as a cache of the approved img_versions
-    // row — no change needed here.
+    // 4. Mask unapproved images
     const shaped = scholars.map((scholar) => {
       const version = scholar.scholar_versions[0];
       if (version && version.image_status !== "approved") {
@@ -692,41 +715,46 @@ exports.getScholarById = async (req, res) => {
             // it was previously included at the wrong level, which
             // would throw a Prisma "unknown field" error.
             media: {
-              where: { status: "approved" },
-            },
+  where: { status: "approved" },
+  include: {
+    users: { select: { id: true, username: true } },
+  },
+},
             internal_links: {
               include: {
                 scholars: true,
               },
             },
-          },
-        },
-
-        // ── Disciplines are a flat table now (no translations) ──
-        scholar_disciplines: {
-          include: {
-            disciplines: true,
+            // CHANGED: disciplines moved here — now version-scoped,
+            // same reasoning as works/media/references.
+            scholar_disciplines: {
+              include: {
+                disciplines: true,
+              },
+            },
+            // CHANGED: comments moved here — each version now has its
+            // own comment thread instead of sharing one across every
+            // language version of a scholar.
+            comments: {
+              where: {
+                deleted_at: null,
+              },
+              include: {
+                users: {
+                  select: {
+                    id: true,
+                    username: true,
+                  },
+                },
+              },
+              orderBy: {
+                created_at: "desc",
+              },
+            },
           },
         },
 
         bibliography: true,
-
-        comments: {
-          where: {
-            deleted_at: null,
-          },
-          include: {
-            users: {
-              select: {
-                id: true,
-                username: true,
-              },
-            },
-          },
-          orderBy: {
-            created_at: "desc",
-          },
-        },
 
         scholar_contributors: {
           include: {
@@ -739,11 +767,23 @@ exports.getScholarById = async (req, res) => {
           },
         },
 
-        scholar_relationships_scholar_relationships_scholar_idToscholars: {
-          include: {
-            scholars_scholar_relationships_related_scholar_idToscholars: true,
+       scholar_relationships_scholar_relationships_scholar_idToscholars: {
+  include: {
+    scholars_scholar_relationships_related_scholar_idToscholars: {
+      include: {
+       
+        scholar_versions: {
+          where: { status: "approved" },
+          orderBy: { created_at: "desc" },
+          select: {
+            canonical_name: true,
+            languages: { select: { code: true } },
           },
         },
+      },
+    },
+  },
+},
       },
     });
 
@@ -782,14 +822,17 @@ exports.getScholarById = async (req, res) => {
 
     // Works for this version — FIX: same missing filter as references.
     const works = await prisma.scholar_works.findMany({
-      where: {
-        version_id: currentVersion.version_id,
-        status: "approved",
-      },
-      orderBy: {
-        year: "desc",
-      },
-    });
+  where: {
+    version_id: currentVersion.version_id,
+    status: "approved",
+  },
+  include: {
+    users: { select: { id: true, username: true } },
+  },
+  orderBy: {
+    year: "desc",
+  },
+});
 
     // Revision history for this scholar in the same language
     const history = await prisma.scholar_versions.findMany({
@@ -854,14 +897,10 @@ exports.getScholarById = async (req, res) => {
     century_gregorian_start,
     century_gregorian_end,
     biography,
+    discipline_ids,
     language_id = 1,
   } = req.body;
-  // NOTE: dates / references / media / works are intentionally NOT read
-  // here anymore. They have their own create/edit endpoints (scholar_dates
-  // controller, references.controller, mediaUpload.controller,
-  // works.controller) and live independently of scholar_versions now.
-  // editScholar only ever touches text fields + aliases.
-
+  
   if (!canonical_name) {
     return res.status(400).json({
       success: false,
@@ -928,8 +967,8 @@ exports.getScholarById = async (req, res) => {
     // --------------------------------------------------
     // 4. Get the CURRENT APPROVED VERSION
     //    Used only as a fallback source for fields the
-    //    contributor didn't send, and for aliases.
-    //    NOT used to clone media/works/references/dates —
+    //    contributor didn't send, and for aliases/disciplines.
+    //    NOT used to clone media/works/references/dates/comments —
     //    those stay on the approved version until this
     //    edit is approved, at which point approveScholar()
     //    reassigns them (see approveScholar).
@@ -943,6 +982,9 @@ exports.getScholarById = async (req, res) => {
       },
       include: {
         scholar_aliases: true,
+        // CHANGED: needed so we can carry forward the discipline set
+        // when the contributor doesn't send a replacement list.
+        scholar_disciplines: true,
       },
       orderBy: {
         created_at: "desc",
@@ -1009,9 +1051,33 @@ exports.getScholarById = async (req, res) => {
         : previousVersion.scholar_aliases.map((a) => a.alias_name);
 
     // --------------------------------------------------
+    // 6b. Disciplines — same pattern as aliases now that they're
+    //     version-scoped. If frontend sends discipline_ids -> use
+    //     the new list. If not -> carry forward the old tags.
+    // --------------------------------------------------
+
+    const finalDisciplineIds =
+      discipline_ids !== undefined
+        ? discipline_ids
+        : previousVersion.scholar_disciplines.map((d) => d.discipline_id);
+
+    if (finalDisciplineIds.length > 0) {
+      const found = await prisma.disciplines.findMany({
+        where: { discipline_id: { in: finalDisciplineIds } },
+      });
+
+      if (found.length !== finalDisciplineIds.length) {
+        return res.status(400).json({
+          success: false,
+          message: "One or more disciplines are invalid.",
+        });
+      }
+    }
+
+    // --------------------------------------------------
     // 7. Create the pending edition
-    //    Only scholar_versions + scholar_aliases are
-    //    written here. No media/works/references/dates
+    //    scholar_versions + scholar_aliases + scholar_disciplines
+    //    are written here. No media/works/references/dates/comments
     //    are touched or cloned.
     // --------------------------------------------------
 
@@ -1070,6 +1136,18 @@ exports.getScholarById = async (req, res) => {
             version_id: version.version_id,
             alias_name: typeof alias === "string" ? alias : alias.alias_name,
           })),
+        });
+      }
+
+      // CHANGED: write disciplines onto the new pending version, same
+      // pattern as aliases above.
+      if (finalDisciplineIds.length > 0) {
+        await tx.scholar_disciplines.createMany({
+          data: finalDisciplineIds.map((did) => ({
+            version_id: version.version_id,
+            discipline_id: did,
+          })),
+          skipDuplicates: true,
         });
       }
 
@@ -1310,25 +1388,35 @@ exports.getScholarByName = async (req, res) => {
               where: { status: "approved" },
             },
             scholar_works: {
-              where: { status: "approved" },
-            },
-            // FIX: media belongs here, nested under scholar_versions —
-            // it was previously included at the wrong level (directly
-            // on `scholars`, which has no `media` relation) and would
-            // have thrown a Prisma "unknown field" error.
+  where: { status: "approved" },
+  include: { users: { select: { id: true, username: true } } },
+},
+            
+            
             media: {
               where: { status: "approved" },
+              include: { users: { select: { id: true, username: true } } },
             },
             languages: true,
             regions: true,
             scholar_dates: true,
-          },
-        },
-
-        // ── Disciplines are a flat table now (no translations) ──
-        scholar_disciplines: {
-          include: {
-            disciplines: true,
+            // CHANGED: disciplines moved here — version-scoped now.
+            scholar_disciplines: {
+              include: {
+                disciplines: true,
+              },
+            },
+            // CHANGED: comments moved here — each version has its own
+            // thread now instead of one shared across all languages.
+            comments: {
+              where: { deleted_at: null },
+              include: {
+                users: {
+                  select: { id: true, username: true },
+                },
+              },
+              orderBy: { created_at: "desc" },
+            },
           },
         },
       },

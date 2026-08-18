@@ -108,27 +108,21 @@ const DEFAULT_LANGUAGE_ID = 1; // 'ar' — Arabic
 // ===================================================
 
 exports.getAllDisciplines = async (req, res) => {
-  const language_id = req.query.language_id
-  ? parseInt(req.query.language_id, 10)
-  : DEFAULT_LANGUAGE_ID;
-
-if (Number.isNaN(language_id)) {
-  return res.status(400).json({
-    success: false,
-    message: "language_id must be a valid number",
-  });
-}
+  const langCode = req.query.lang; // e.g. "en", "ar", "fr" from frontend
+  let language_id = DEFAULT_LANGUAGE_ID;
 
   try {
-    const language = await prisma.languages.findUnique({
-      where: { language_id },
-    });
-
-    if (!language) {
-      return res.status(400).json({
-        success: false,
-        message: `Unknown language_id "${language_id}"`,
+    // 1. If frontend sends ?lang=ar, find the correct language_id for "ar"
+    if (langCode) {
+      const language = await prisma.languages.findFirst({
+        where: { code: langCode },
       });
+      if (language) language_id = language.language_id;
+    } 
+    // 2. Fallback: if someone sends ?language_id=3 directly
+    else if (req.query.language_id) {
+      const parsed = parseInt(req.query.language_id, 10);
+      if (!Number.isNaN(parsed)) language_id = parsed;
     }
 
     const disciplines = await prisma.disciplines.findMany({
