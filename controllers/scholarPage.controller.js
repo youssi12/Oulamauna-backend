@@ -38,6 +38,7 @@ exports.createScholar = async (req, res) => {
     references,
     works, // each item may include a "file_ref" string, e.g. "work_file_0"
     media, // each item may include a "file_ref" string, e.g. "media_file_0"
+    relationships,
   } = payload;
  
   const userId = req.user.id;
@@ -224,6 +225,30 @@ if (!language_id) {
       }
     }
   }
+
+    // ===================================================
+  // 12. Relationships — validation
+  // ===================================================
+  if (relationships && relationships.length > 0) {
+    for (let i = 0; i < relationships.length; i++) {
+      const rel = relationships[i];
+      
+      // Only validate related_scholar_id (scholar_id will be auto-filled)
+      if (!rel.related_scholar_id) {
+        return res.status(400).json({
+          success: false,
+          message: `Relationship #${i + 1}: related_scholar_id is required.`,
+        });
+      }
+      
+      if (!["teacher", "student"].includes(rel.relation_type)) {
+        return res.status(400).json({
+          success: false,
+          message: `Relationship #${i + 1}: relation_type must be 'teacher' or 'student'.`,
+        });
+      }
+    }
+  }
  
   try {
     // ===================================================
@@ -385,12 +410,23 @@ if (!language_id) {
         });
       }
  
-      await tx.scholar_contributors.upsert({
+           await tx.scholar_contributors.upsert({
         where: { scholar_id_user_id: { scholar_id: scholar.scholar_id, user_id: userId } },
         create: { scholar_id: scholar.scholar_id, user_id: userId },
         update: {},
       });
- 
+
+      if (relationships && relationships.length > 0) {
+        for (const rel of relationships) {
+          await tx.scholar_relationships.create({
+            data: {
+              scholar_id: scholar.scholar_id, // <--- Use the ID we just created!
+              related_scholar_id: parseInt(rel.related_scholar_id),
+              relation_type: rel.relation_type,
+            },
+          });
+        }
+      }
       return { scholar, version };
     });
  
@@ -1442,5 +1478,57 @@ exports.getScholarByName = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+exports.addScholarRelationship = async (req, res) => {
+  const { scholar_id, related_scholar_id, relation_type } = req.body;
+
+  if (!["teacher", "student"].includes(relation_type)) {
+    return res.status(400).json({ success: false, message: "relation_type must be 'teacher' or 'student'" });
+  }
+
+  if (!scholar_id || !related_scholar_id) {
+    return res.status(400).json({ success: false, message: "scholar_id and related_scholar_id are required" });
+  }
+
+  if (parseInt(scholar_id) === parseInt(related_scholar_id)) {
+    return res.status(400).json({ success: false, message: "A scholar cannot be related to themselves" });
+  }
+
+  try {
+    const [scholar1, scholar2] = await Promise.all([
+      prisma.scholars.findUnique({ where: { scholar_id: parseInt(scholar_id) } }),
+      prisma.scholars.findUnique({ where: { scholar_id: parseInt(related_scholar_id) } }),
+    ]);
+
+    if (!scholar1 || !scholar2) {
+      return res.status(404).json({ success: false, message: "One or both scholars not found" });
+    }
+
+    const existing = await prisma.scholar_relationships.findFirst({
+      where: {
+        scholar_id: parseInt(scholar_id),
+        related_scholar_id: parseInt(related_scholar_id),
+        relation_type: relation_type,
+      },
+    });
+
+    if (existing) {
+      return res.status(400).json({ success: false, message: "This relationship already exists" });
+    }
+
+    const relationship = await prisma.scholar_relationships.create({
+      data: {
+        scholar_id: parseInt(scholar_id),
+        related_scholar_id: parseInt(related_scholar_id),
+        relation_type: relation_type,
+      },
+    });
+
+    return res.json({ success: true, message: "Relationship created successfully", data: relationship });
+  } catch (error) {
+    console.error("addScholarRelationship error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };

@@ -1,21 +1,23 @@
- const express = require("express");
+const express = require("express");
 const router = express.Router();
 
 const scholarPage = require("../controllers/scholarPage.controller");
 const protect = require("../middlewares/auth.middleware");
 const { uploadScholarBundle } = require("../config/cloudinary");
 
-
 // Create
-router.post("/",uploadScholarBundle.any(), scholarPage.createScholar);
+router.post("/", protect, uploadScholarBundle.any(), scholarPage.createScholar);
 
 // Read
-router.get("/", scholarPage.getPublishedScholars);          // List + filters
-router.get("/name", scholarPage.getScholarByName);        // Search by name/alias
-router.get("/my-submissions", scholarPage.getMySubmissions);
-router.get("/:id", scholarPage.getScholarById);             // Single scholar
+router.get("/", scholarPage.getPublishedScholars);          
+router.get("/name", scholarPage.getScholarByName);        
+router.get("/my-submissions", protect, scholarPage.getMySubmissions);
+router.get("/:id", scholarPage.getScholarById);             
 
 // Update
-router.patch("/:id", scholarPage.editScholar);
+router.patch("/:id", protect, scholarPage.editScholar);
+
+// ✅ ADD THIS: Relationships endpoint
+router.post("/relationships", protect, scholarPage.addScholarRelationship);
 
 module.exports = router;
