@@ -73,7 +73,7 @@ exports.getPendingCreatedScholars = async (req, res) => {
 
 exports.getPendingEditedScholars = async (req, res) => {
   try {
-    const pending = await prisma.scholar_versions.findMany({
+        const pending = await prisma.scholar_versions.findMany({
       where: { status: "pending", version_type: "edition" },
       include: {
         scholars: true,
@@ -81,17 +81,8 @@ exports.getPendingEditedScholars = async (req, res) => {
         languages: true,
         scholar_aliases: true,
         regions: true,
-        // no scholar_references, media, scholar_works, scholar_dates here —
-        // a pending edition genuinely owns none of these yet
-        //
-        // FIX: img_versions IS relevant here, unlike the four above — an
-        // image proposal can be submitted against a version regardless of
-        // whether it's approved or a brand-new pending/creation version
-        // (see uploadScholarImageService's status guard), but NOT against
-        // a pending/edition version. So a pending edition itself never
-        // owns image proposals either — leaving this comment instead of
-        // adding img_versions here, to match the reasoning already given
-        // for the four omitted relations above.
+        // ✅ ADDED: The pending edition NOW owns the proposed image in img_versions
+        img_versions: true, 
       },
       orderBy: { created_at: "asc" }
     });
@@ -111,17 +102,25 @@ exports.getPendingEditedScholars = async (req, res) => {
             scholar_dates: true,      // ← and dates
             media: true,              // ← and media
             scholar_works: true,      // ← and works
-            // FIX: img_versions belongs in this list for the same reason
+                       // FIX: img_versions belongs in this list for the same reason
             // as the others — this is the "current, real, still-live"
             // content the admin should see as "will carry over unchanged"
-            // if the edit gets approved. Previously omitted, so an admin
-            // reviewing a pending edit had no visibility into the
-            // scholar's current image proposal history here.
             img_versions: true,
+            
+            // ✅ ADD THIS: So admin can see relationships that will carry over
+            scholar_relationships_as_source: {
+              include: {
+                related_scholar_version: {
+                  include: {
+                    scholars: true,
+                    languages: true,
+                  }
+                }
+              }
+            },
           },
           orderBy: { created_at: "desc" },
         });
-
         return {
           proposed: version,
           current: currentApproved
@@ -154,54 +153,49 @@ exports.approveScholar = async (req, res) => {
       return res.status(400).json({ success: false, message: "Version is not pending" });
     }
 
-    const updated = await prisma.$transaction(async (tx) => {
-      // ── If this is an edit, reassign children from the old approved version ──
-      // FIX: hoisted `previousApproved` out of this if-block (was
-      // previously scoped only inside it) so it's still reachable below,
-      // where it's now needed to copy the image scalar cache onto the
-      // version being approved.
+             const updated = await prisma.$transaction(async (tx) => {
       let previousApproved = null;
 
       if (version.version_type === "edition") {
-          previousApproved = await tx.scholar_versions.findFirst({
-               where: {
-                 scholar_id: version.scholar_id,
-                 language_id: version.language_id,
-                 status: "approved",
-               },
-               orderBy: {
-                 created_at: "desc",
-               },
-               });
+        previousApproved = await tx.scholar_versions.findFirst({
+          where: {
+            scholar_id: version.scholar_id,
+            language_id: version.language_id,
+            status: "approved",
+          },
+          orderBy: { created_at: "desc" },
+        });
 
         if (previousApproved) {
-          await tx.scholar_dates.updateMany({
-            where: { version_id: previousApproved.version_id },
-            data: { version_id: versionId },
-          });
+          // ✅ MOVE old works, media, references, relationships, images, AND COMMENTS to the new version.
+          
           await tx.media.updateMany({
             where: { version_id: previousApproved.version_id },
             data: { version_id: versionId },
           });
+          
           await tx.scholar_works.updateMany({
             where: { version_id: previousApproved.version_id },
             data: { version_id: versionId },
           });
+          
           await tx.scholar_references.updateMany({
             where: { version_id: previousApproved.version_id },
             data: { version_id: versionId },
           });
-
-          // FIX: img_versions (the image proposal/history table) was
-          // completely missing from this reassignment step. Without this,
-          // approving an edit left the old version's entire image
-          // proposal history — including whichever proposal is currently
-          // approved — still pointing at the now-superseded old
-          // version_id, orphaned from the version that's actually live
-          // going forward. Reassigning it here mirrors exactly what's
-          // already done for scholar_dates/media/scholar_works/
-          // scholar_references above — same pattern, same table.
+          
+          await tx.scholar_relationships.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+          
           await tx.img_versions.updateMany({
+            where: { version_id: previousApproved.version_id },
+            data: { version_id: versionId },
+          });
+
+          // ✅ ADD THIS: Move comments to the new approved version so they aren't lost!
+          await tx.comments.updateMany({
             where: { version_id: previousApproved.version_id },
             data: { version_id: versionId },
           });
@@ -213,30 +207,43 @@ exports.approveScholar = async (req, res) => {
         }
       }
 
+      // ✅ Automatically approve any NEW pending references, works, or media 
+      // that were submitted alongside this edit proposal.
+      await tx.scholar_references.updateMany({
+        where: { version_id: versionId, status: "pending" },
+        data: { status: "approved" },
+      });
+
+      await tx.scholar_works.updateMany({
+        where: { version_id: versionId, status: "pending" },
+        data: { status: "approved" },
+      });
+
+      await tx.media.updateMany({
+        where: { version_id: versionId, status: "pending" },
+        data: { status: "approved" },
+      });
+            // ✅ Also approve the pending image proposal
+      await tx.img_versions.updateMany({
+        where: { version_id: versionId, status: "pending" },
+        data: { status: "approved" },
+      });
+
+      // ✅ Find the newly approved image to sync it to scholar_versions
+      const approvedImage = await tx.img_versions.findFirst({
+        where: { version_id: versionId, status: "approved" },
+        orderBy: { created_at: 'desc' }
+      });
+
+      // ── Finally, approve the scholar version itself ──
       return tx.scholar_versions.update({
         where: { version_id: versionId },
         data: {
           status: "approved",
-
-          // FIX: without this, the version becoming live has a null
-          // image_url even when the old version had an approved image —
-          // editScholar() deliberately no longer copies image_url/
-          // image_status onto the new pending edition at submission time
-          // (to avoid copying a value that could go stale before this
-          // approval happens), so this is now the one place that copy is
-          // allowed to happen — using the freshest data available, read
-          // at the moment of approval rather than at submission time.
-          // Only applies to editions with a previous approved version;
-          // a brand-new "creation" version has no previous image to
-          // inherit, and its own image proposals (if any) are handled
-          // entirely through approveScholarImage instead.
-          ...(version.version_type === "edition" && previousApproved
-            ? {
-                image_url: previousApproved.image_url,
-                image_status: previousApproved.image_status,
-                image_uploaded_by: previousApproved.image_uploaded_by,
-              }
-            : {}),
+          // ✅ Sync the image URL from img_versions to scholar_versions ONLY upon approval
+          image_url: approvedImage ? approvedImage.image_url : null,
+          image_status: approvedImage ? "approved" : null,
+          image_uploaded_by: approvedImage ? approvedImage.uploaded_by : null,
         },
         include: {
           scholar_aliases: true,
@@ -248,14 +255,10 @@ exports.approveScholar = async (req, res) => {
           scholar_works: true,
           users: { select: { id: true, username: true, email: true } },
           scholars: true,
-          // FIX: added so the response actually reflects the
-          // img_versions rows reassigned above, same as every other
-          // reassigned relation already included here.
           img_versions: true,
         },
       });
     });
-
     // 2. Notify user
     if (version.created_by) {
       await prisma.notifications.create({

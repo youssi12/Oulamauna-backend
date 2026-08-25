@@ -34,14 +34,7 @@ const uploadScholarImageService = async ({
     );
   }
 
-  if (
-    version.status === "pending" &&
-    version.version_type === "edition"
-  ) {
-    throw new Error(
-      "This version is a pending edit with no content of its own yet — use the currently approved version_id."
-    );
-  }
+  
 
   const imageVersion = await prisma.img_versions.create({
     data: {
