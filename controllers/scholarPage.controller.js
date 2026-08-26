@@ -3,7 +3,7 @@ const { uploadScholarImageService } = require("../service/scholarImage.service")
 const { createWorkService } = require("../service/works.service");
 const { uploadMediaService } = require("../service/media.service");
 const { createReferenceService } = require("../service/references.service");
-
+const { isAdminUser } = require("../service/role.service"); 
 
 const WORK_FORMATS = new Set(["BOOK","ARTICLE","TREATISE","MANUSCRIPT","LECTURE","SERMON","FATWA","POEM","LETTER","COMMENTARY","TRANSLATION","RESEARCH","COURSE","DEVICE","INVENTION","SOFTWARE","MAP","OTHER",]);
 const DATE_TYPES = new Set(["birth", "death"]);
@@ -19,25 +19,7 @@ exports.createScholar = async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" });
   }
  
-  const {
-    scholar_id,
-    canonical_name,
-    aliases,
-    region_id,
-    century_hijri_start,
-    century_hijri_end,
-    century_gregorian_start,
-    century_gregorian_end,
-    dates,
-    biography,
-    language_id,
-    discipline_ids,
-    references,
-    works,
-    media,
-    relationships,
-  } = payload;
- 
+  const { scholar_id, canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, dates, biography, language_id, discipline_ids, references, works, media, relationships } = payload;
   const userId = req.user.id;
   const filesByField = {};
   (req.files || []).forEach((f) => { filesByField[f.fieldname] = f; });
@@ -87,27 +69,16 @@ exports.createScholar = async (req, res) => {
     }
   }
 
-  // ===================================================
-  // Relationships — Comprehensive Validation
-  // ===================================================
   let validatedRelationships = [];
   if (relationships && relationships.length > 0) {
     const currentScholarId = scholar_id ? parseInt(scholar_id) : null;
     const relatedVersionIds = [...new Set(relationships.map(r => parseInt(r.related_version_id)))];
-    
-    const relatedVersions = await prisma.scholar_versions.findMany({
-      where: { version_id: { in: relatedVersionIds } },
-      select: { version_id: true, scholar_id: true, canonical_name: true },
-    });
-
+    const relatedVersions = await prisma.scholar_versions.findMany({ where: { version_id: { in: relatedVersionIds } }, select: { version_id: true, scholar_id: true, canonical_name: true } });
     let existingDirect = new Set();
     let existingInverse = new Set();
     
     if (currentScholarId) {
-      const existingApprovedVersion = await prisma.scholar_versions.findFirst({
-        where: { scholar_id: currentScholarId, status: "approved" },
-        include: { scholar_relationships_as_source: true }
-      });
+      const existingApprovedVersion = await prisma.scholar_versions.findFirst({ where: { scholar_id: currentScholarId, status: "approved" }, include: { scholar_relationships_as_source: true } });
       if (existingApprovedVersion) {
         for (const rel of existingApprovedVersion.scholar_relationships_as_source) {
           existingDirect.add(`${rel.related_version_id}-${rel.relation_type}`);
@@ -123,30 +94,18 @@ exports.createScholar = async (req, res) => {
       const targetVId = parseInt(rel.related_version_id);
       const type = rel.relation_type;
       const key = `${targetVId}-${type}`;
-
       if (!targetVId) return res.status(400).json({ success: false, message: `Relationship #${i + 1}: related_version_id is required.` });
       if (!["teacher", "student"].includes(type)) return res.status(400).json({ success: false, message: `Relationship #${i + 1}: relation_type must be 'teacher' or 'student'.` });
-
       const targetScholar = relatedVersions.find(v => v.version_id === targetVId);
       if (!targetScholar) return res.status(400).json({ success: false, message: `Relationship #${i + 1}: related_version_id not found.` });
-
-      // 1. Prevent self-relation
-      if (currentScholarId && targetScholar.scholar_id === currentScholarId) {
-        return res.status(400).json({ success: false, message: `Relationship #${i + 1}: A scholar cannot have a relationship with themselves.` });
-      }
-      // 2. Prevent duplicates within the same request
+      if (currentScholarId && targetScholar.scholar_id === currentScholarId) return res.status(400).json({ success: false, message: `Relationship #${i + 1}: A scholar cannot have a relationship with themselves.` });
       if (seenInRequest.has(key)) continue;
       seenInRequest.add(key);
-      // 3. Prevent adding relationships that already exist
-      if (existingDirect.has(key)) {
-        return res.status(400).json({ success: false, message: `Relationship already exists: ${targetScholar.canonical_name} is already your ${type}.` });
-      }
-      // 4. Prevent bidirectional conflicts
+      if (existingDirect.has(key)) return res.status(400).json({ success: false, message: `Relationship already exists: ${targetScholar.canonical_name} is already your ${type}.` });
       if (existingInverse.has(key)) {
         const invType = type === 'teacher' ? 'student' : 'teacher';
         return res.status(400).json({ success: false, message: `Bidirectional conflict: ${targetScholar.canonical_name} is already recorded as your ${invType}.` });
       }
-
       validatedRelationships.push(rel);
     }
   }
@@ -157,23 +116,17 @@ exports.createScholar = async (req, res) => {
  
     const parsedLanguageId = language_id ? parseInt(language_id) : null;
     const parsedRegionId = region_id ? parseInt(region_id) : null;
- 
     if (language_id && Number.isNaN(parsedLanguageId)) return res.status(400).json({ success: false, message: "language_id must be a valid number" });
     if (region_id && Number.isNaN(parsedRegionId)) return res.status(400).json({ success: false, message: "region_id must be a valid number" });
- 
     if (parsedLanguageId) {
       const language = await prisma.languages.findUnique({ where: { language_id: parsedLanguageId } });
       if (!language) return res.status(400).json({ success: false, message: "Invalid language." });
     }
- 
     if (parsedRegionId) {
       const region = await prisma.regions.findUnique({ where: { region_id: parsedRegionId } });
       if (!region) return res.status(400).json({ success: false, message: "Invalid region." });
-      if (parsedLanguageId && region.language_id !== parsedLanguageId) {
-        return res.status(400).json({ success: false, message: "region_id does not belong to the given language_id." });
-      }
+      if (parsedLanguageId && region.language_id !== parsedLanguageId) return res.status(400).json({ success: false, message: "region_id does not belong to the given language_id." });
     }
- 
     if (discipline_ids && discipline_ids.length > 0) {
       const found = await prisma.disciplines.findMany({ where: { discipline_id: { in: discipline_ids } } });
       if (found.length !== discipline_ids.length) return res.status(400).json({ success: false, message: "One or more disciplines are invalid." });
@@ -184,16 +137,17 @@ exports.createScholar = async (req, res) => {
       existingScholar = await prisma.scholars.findUnique({ where: { scholar_id: parseInt(scholar_id) } });
       if (!existingScholar) return res.status(404).json({ success: false, message: "Scholar not found" });
       if (parsedLanguageId) {
-        const existingVersion = await prisma.scholar_versions.findFirst({
-          where: { scholar_id: parseInt(scholar_id), language_id: parsedLanguageId, status: "approved" },
-        });
+        const existingVersion = await prisma.scholar_versions.findFirst({ where: { scholar_id: parseInt(scholar_id), language_id: parsedLanguageId, status: "approved" } });
         if (existingVersion) return res.status(400).json({ success: false, message: "An approved version in this language already exists for this scholar" });
       }
     }
  
+    // ✅ CHECK IF USER IS ADMIN FOR AUTO-APPROVAL
+    const isUserAdmin = await isAdminUser(userId);
+    const initialStatus = isUserAdmin ? "approved" : "pending";
+
     const { scholar, version } = await prisma.$transaction(async (tx) => {
       const scholar = existingScholar ? existingScholar : await tx.scholars.create({ data: { created_by: userId, created_at: new Date() } });
- 
       const version = await tx.scholar_versions.create({
         data: {
           scholar_id: scholar.scholar_id,
@@ -206,49 +160,23 @@ exports.createScholar = async (req, res) => {
           century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
           biography,
           version_type: "creation",
-          status: "pending",
+          status: initialStatus, // 👈 DYNAMIC STATUS
           created_by: userId,
           created_at: new Date(),
         },
       });
  
-      if (aliases && aliases.length > 0) {
-        await tx.scholar_aliases.createMany({ data: aliases.map((alias) => ({ version_id: version.version_id, alias_name: alias })) });
-      }
+      if (aliases && aliases.length > 0) await tx.scholar_aliases.createMany({ data: aliases.map((alias) => ({ version_id: version.version_id, alias_name: alias })) });
       if (dates && dates.length > 0) {
-        await tx.scholar_dates.createMany({
-          data: dates.map((d) => ({
-            version_id: version.version_id,
-            date_type: d.date_type,
-            calendar: d.calendar,
-            year: d.year ? parseInt(d.year) : null,
-            is_approximate: !!d.is_approximate,
-            raw_text: d.raw_text || null,
-          })),
-        });
+        await tx.scholar_dates.createMany({ data: dates.map((d) => ({ version_id: version.version_id, date_type: d.date_type, calendar: d.calendar, year: d.year ? parseInt(d.year) : null, is_approximate: !!d.is_approximate, raw_text: d.raw_text || null })) });
       }
       if (discipline_ids && discipline_ids.length > 0) {
-        await tx.scholar_disciplines.createMany({
-          data: discipline_ids.map((did) => ({ version_id: version.version_id, discipline_id: did })),
-          skipDuplicates: true,
-        });
+        await tx.scholar_disciplines.createMany({ data: discipline_ids.map((did) => ({ version_id: version.version_id, discipline_id: did })), skipDuplicates: true });
       }
-      await tx.scholar_contributors.upsert({
-        where: { scholar_id_user_id: { scholar_id: scholar.scholar_id, user_id: userId } },
-        create: { scholar_id: scholar.scholar_id, user_id: userId },
-        update: {},
-      });
-
-      // Insert validated relationships
+      await tx.scholar_contributors.upsert({ where: { scholar_id_user_id: { scholar_id: scholar.scholar_id, user_id: userId } }, create: { scholar_id: scholar.scholar_id, user_id: userId }, update: {} });
       if (validatedRelationships && validatedRelationships.length > 0) {
         for (const rel of validatedRelationships) {
-          await tx.scholar_relationships.create({
-            data: {
-              version_id: version.version_id,
-              related_version_id: parseInt(rel.related_version_id),
-              relation_type: rel.relation_type,
-            },
-          });
+          await tx.scholar_relationships.create({ data: { version_id: version.version_id, related_version_id: parseInt(rel.related_version_id), relation_type: rel.relation_type } });
         }
       }
       return { scholar, version };
@@ -260,59 +188,49 @@ exports.createScholar = async (req, res) => {
     if (imageFile) {
       try {
         imageResult = await uploadScholarImageService({ version_id: version.version_id, file: imageFile, uploaded_by: userId });
-        // Write directly onto scholar_versions instead of img_versions
-        await prisma.scholar_versions.update({
-          where: { version_id: version.version_id },
-          data: {
-            image_url: imageResult.image_url,
-            image_status: "pending",
-            image_uploaded_by: userId,
-          },
-        });
+        
+        // ✅ ADMIN AUTO-APPROVE IMAGE
+        if (initialStatus === "approved") {
+          await prisma.img_versions.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+          await prisma.scholar_versions.update({ where: { version_id: version.version_id }, data: { image_url: imageResult.image_url, image_status: "approved", image_uploaded_by: userId } });
+        } else {
+          await prisma.scholar_versions.update({ where: { version_id: version.version_id }, data: { image_url: imageResult.image_url, image_status: "pending", image_uploaded_by: userId } });
+        }
       } catch (err) {
         sideEffectErrors.push({ type: "image", message: err.message });
       }
     }
  
-    const workResults = [];
+    const workResults = [], mediaResults = [], referenceResults = [];
     if (works && works.length > 0) {
       for (let i = 0; i < works.length; i++) {
-        const w = works[i];
         try {
-          const file = w.file_ref ? filesByField[w.file_ref] : undefined;
-          const created = await createWorkService({ version_id: version.version_id, title: w.title, year: w.year, format: w.format, description: w.description, media_url: w.media_url, created_by: userId, file });
-          workResults.push(created);
-        } catch (err) {
-          sideEffectErrors.push({ type: "work", index: i, message: err.message });
-        }
+          const file = works[i].file_ref ? filesByField[works[i].file_ref] : undefined;
+          workResults.push(await createWorkService({ version_id: version.version_id, title: works[i].title, year: works[i].year, format: works[i].format, description: works[i].description, media_url: works[i].media_url, created_by: userId, file }));
+        } catch (err) { sideEffectErrors.push({ type: "work", index: i, message: err.message }); }
       }
     }
- 
-    const mediaResults = [];
     if (media && media.length > 0) {
       for (let i = 0; i < media.length; i++) {
-        const m = media[i];
         try {
-          const file = m.file_ref ? filesByField[m.file_ref] : undefined;
-          const created = await uploadMediaService({ version_id: version.version_id, title: m.title, year: m.year, description: m.description, media_url: m.media_url, file, userId });
-          mediaResults.push(created);
-        } catch (err) {
-          sideEffectErrors.push({ type: "media", index: i, message: err.message });
-        }
+          const file = media[i].file_ref ? filesByField[media[i].file_ref] : undefined;
+          mediaResults.push(await uploadMediaService({ version_id: version.version_id, title: media[i].title, year: media[i].year, description: media[i].description, media_url: media[i].media_url, file, userId }));
+        } catch (err) { sideEffectErrors.push({ type: "media", index: i, message: err.message }); }
       }
     }
- 
-    const referenceResults = [];
     if (references && references.length > 0) {
       for (let i = 0; i < references.length; i++) {
-        const r = references[i];
         try {
-          const created = await createReferenceService({ version_id: version.version_id, title: r.title, citation: r.citation, created_by: userId, url: r.url });
-          referenceResults.push(created);
-        } catch (err) {
-          sideEffectErrors.push({ type: "reference", index: i, message: err.message });
-        }
+          referenceResults.push(await createReferenceService({ version_id: version.version_id, title: references[i].title, citation: references[i].citation, created_by: userId, url: references[i].url }));
+        } catch (err) { sideEffectErrors.push({ type: "reference", index: i, message: err.message }); }
       }
+    }
+
+    // ✅ ADMIN AUTO-APPROVE ALL RELATED ITEMS
+    if (initialStatus === "approved") {
+      await prisma.scholar_works.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+      await prisma.media.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+      await prisma.scholar_references.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
     }
  
     const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
@@ -1080,82 +998,38 @@ exports.editScholar = async (req, res) => {
   const scholarId = parseInt(req.params.id);
   const userId = req.user.id;
 
-  // ✅ 1. Handle both flat req.body and multipart req.body.data
   let payload = req.body;
   if (req.body.data) {
-    try {
-      payload = JSON.parse(req.body.data);
-    } catch (err) {
-      return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" });
-    }
+    try { payload = JSON.parse(req.body.data); } catch (err) { return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" }); }
   }
 
-  const {
-    canonical_name,
-    aliases,
-    region_id,
-    century_hijri_start,
-    century_hijri_end,
-    century_gregorian_start,
-    century_gregorian_end,
-    biography,
-    discipline_ids,
-    language_id = 1,
-    dates,
-    new_references,
-    new_relationships,
-  } = payload;
-  
-  // ✅ 2. Build file lookup for multipart uploads
+  const { canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, biography, discipline_ids, language_id = 1, dates, new_references, new_relationships } = payload;
   const filesByField = {};
   (req.files || []).forEach((f) => { filesByField[f.fieldname] = f; });
   
-  if (!canonical_name) {
-    return res.status(400).json({ success: false, message: "canonical_name is required" });
-  }
-
+  if (!canonical_name) return res.status(400).json({ success: false, message: "canonical_name is required" });
   if (dates && dates.length > 0) {
     for (let i = 0; i < dates.length; i++) {
       const d = dates[i];
-      if (!["birth", "death"].includes(d.date_type)) {
-        return res.status(400).json({ success: false, message: `Date #${i + 1}: date_type must be 'birth' or 'death'` });
-      }
-      if (!["hijri", "gregorian"].includes(d.calendar)) {
-        return res.status(400).json({ success: false, message: `Date #${i + 1}: calendar must be 'hijri' or 'gregorian'` });
-      }
+      if (!["birth", "death"].includes(d.date_type)) return res.status(400).json({ success: false, message: `Date #${i + 1}: date_type must be 'birth' or 'death'` });
+      if (!["hijri", "gregorian"].includes(d.calendar)) return res.status(400).json({ success: false, message: `Date #${i + 1}: calendar must be 'hijri' or 'gregorian'` });
     }
   }
 
   try {
     const user = await prisma.users.findUnique({ where: { id: userId } });
-    if (!user || !user.allowed_to_contribute) {
-      return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
-    }
+    if (!user || !user.allowed_to_contribute) return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
 
     const scholar = await prisma.scholars.findUnique({ where: { scholar_id: scholarId } });
-    if (!scholar) {
-      return res.status(404).json({ success: false, message: "Scholar not found" });
-    }
+    if (!scholar) return res.status(404).json({ success: false, message: "Scholar not found" });
 
     const parsedLanguageId = parseInt(language_id);
-
     const previousVersion = await prisma.scholar_versions.findFirst({
       where: { scholar_id: scholarId, language_id: parsedLanguageId, status: "approved" },
-      include: {
-        scholar_aliases: true,
-        scholar_disciplines: true,
-        scholar_works: true,
-        media: true,
-        scholar_references: true,
-        scholar_dates: true,
-        scholar_relationships_as_source: true,
-      },
+      include: { scholar_aliases: true, scholar_disciplines: true, scholar_works: true, media: true, scholar_references: true, scholar_dates: true, scholar_relationships_as_source: true },
       orderBy: { created_at: "desc" },
     });
-
-    if (!previousVersion) {
-      return res.status(404).json({ success: false, message: "No approved version exists for this scholar in this language" });
-    }
+    if (!previousVersion) return res.status(404).json({ success: false, message: "No approved version exists for this scholar in this language" });
 
     const finalCanonicalName = canonical_name ?? previousVersion.canonical_name;
     const finalRegionId = region_id !== undefined ? (region_id === null ? null : parseInt(region_id)) : previousVersion.region_id;
@@ -1172,163 +1046,120 @@ exports.editScholar = async (req, res) => {
 
     if (finalDisciplineIds.length > 0) {
       const found = await prisma.disciplines.findMany({ where: { discipline_id: { in: finalDisciplineIds } } });
-      if (found.length !== finalDisciplineIds.length) {
-        return res.status(400).json({ success: false, message: "One or more disciplines are invalid." });
-      }
+      if (found.length !== finalDisciplineIds.length) return res.status(400).json({ success: false, message: "One or more disciplines are invalid." });
     }
+
+    // ✅ CHECK IF USER IS ADMIN FOR AUTO-APPROVAL
+    const isUserAdmin = await isAdminUser(userId);
+    const initialStatus = isUserAdmin ? "approved" : "pending";
 
     const newVersion = await prisma.$transaction(async (tx) => {
       const version = await tx.scholar_versions.create({
         data: {
-          scholar_id: scholarId,
-          language_id: parsedLanguageId,
-          canonical_name: finalCanonicalName,
-          region_id: finalRegionId,
-          century_hijri_start: finalHijriStart,
-          century_hijri_end: finalHijriEnd,
-          century_gregorian_start: finalGregorianStart,
-          century_gregorian_end: finalGregorianEnd,
-          biography: finalBiography,
-          image_url: finalImageUrl,
-          image_status: finalImageStatus,
-          image_uploaded_by: finalImageUploadedBy,
-          version_type: "edition",
-          status: "pending",
-          created_by: userId,
-          created_at: new Date(),
+          scholar_id: scholarId, language_id: parsedLanguageId, canonical_name: finalCanonicalName, region_id: finalRegionId,
+          century_hijri_start: finalHijriStart, century_hijri_end: finalHijriEnd, century_gregorian_start: finalGregorianStart, century_gregorian_end: finalGregorianEnd,
+          biography: finalBiography, image_url: finalImageUrl, image_status: finalImageStatus, image_uploaded_by: finalImageUploadedBy,
+          version_type: "edition", status: initialStatus, created_by: userId, created_at: new Date(),
         },
       });
 
-      if (finalAliases.length > 0) {
-        await tx.scholar_aliases.createMany({
-          data: finalAliases.map((alias) => ({
-            version_id: version.version_id,
-            alias_name: typeof alias === "string" ? alias : alias.alias_name,
-          })),
-        });
-      }
-
-      if (finalDisciplineIds.length > 0) {
-        await tx.scholar_disciplines.createMany({
-          data: finalDisciplineIds.map((did) => ({
-            version_id: version.version_id,
-            discipline_id: did,
-          })),
-          skipDuplicates: true,
-        });
-      }
-
+      if (finalAliases.length > 0) await tx.scholar_aliases.createMany({ data: finalAliases.map((alias) => ({ version_id: version.version_id, alias_name: typeof alias === "string" ? alias : alias.alias_name })) });
+      if (finalDisciplineIds.length > 0) await tx.scholar_disciplines.createMany({ data: finalDisciplineIds.map((did) => ({ version_id: version.version_id, discipline_id: did })), skipDuplicates: true });
+      
       const datesToCreate = (dates && dates.length > 0) ? dates : previousVersion.scholar_dates;
       if (datesToCreate && datesToCreate.length > 0) {
-        await tx.scholar_dates.createMany({
-          data: datesToCreate.map((d) => ({
-            version_id: version.version_id,
-            date_type: d.date_type,
-            calendar: d.calendar,
-            year: d.year ? parseInt(d.year) : null,
-            is_approximate: !!d.is_approximate,
-            raw_text: d.raw_text || null,
-          })),
-        });
+        await tx.scholar_dates.createMany({ data: datesToCreate.map((d) => ({ version_id: version.version_id, date_type: d.date_type, calendar: d.calendar, year: d.year ? parseInt(d.year) : null, is_approximate: !!d.is_approximate, raw_text: d.raw_text || null })) });
       }
 
       if (new_references && new_references.length > 0) {
-        await tx.scholar_references.createMany({
-          data: new_references.map((r) => ({
-            version_id: version.version_id,
-            title: r.title,
-            citation: r.citation,
-            url: r.url || null,
-            created_by: userId,
-            status: "pending",
-          })),
-        });
+        await tx.scholar_references.createMany({ data: new_references.map((r) => ({ version_id: version.version_id, title: r.title, citation: r.citation, url: r.url || null, created_by: userId, status: "pending" })) });
       }
 
       if (new_relationships && new_relationships.length > 0) {
         const relatedVersionIds = [...new Set(new_relationships.map(r => parseInt(r.related_version_id)))];
-        const relatedVersions = await prisma.scholar_versions.findMany({
-          where: { version_id: { in: relatedVersionIds } },
-          select: { version_id: true, scholar_id: true, canonical_name: true },
-        });
-
-        const existingDirect = new Set();
-        const existingInverse = new Set();
-
+        const relatedVersions = await prisma.scholar_versions.findMany({ where: { version_id: { in: relatedVersionIds } }, select: { version_id: true, scholar_id: true, canonical_name: true } });
+        const existingDirect = new Set(), existingInverse = new Set();
         for (const rel of previousVersion.scholar_relationships_as_source) {
           existingDirect.add(`${rel.related_version_id}-${rel.relation_type}`);
-          const invType = rel.relation_type === 'teacher' ? 'student' : 'teacher';
-          existingInverse.add(`${rel.related_version_id}-${invType}`);
+          existingInverse.add(`${rel.related_version_id}-${rel.relation_type === 'teacher' ? 'student' : 'teacher'}`);
         }
-
-        const seenInRequest = new Set();
-        const validatedNewRels = [];
-
+        const seenInRequest = new Set(), validatedNewRels = [];
         for (const rel of new_relationships) {
           const targetVId = parseInt(rel.related_version_id);
-          const type = rel.relation_type;
-          const key = `${targetVId}-${type}`;
-
+          const key = `${targetVId}-${rel.relation_type}`;
           const targetScholar = relatedVersions.find(v => v.version_id === targetVId);
           if (!targetScholar) throw new Error(`Related version ${targetVId} not found.`);
-          
-          if (targetScholar.scholar_id === scholarId) {
-            throw new Error("A scholar cannot have a relationship with themselves.");
-          }
-
+          if (targetScholar.scholar_id === scholarId) throw new Error("A scholar cannot have a relationship with themselves.");
           if (seenInRequest.has(key)) continue;
           seenInRequest.add(key);
-
-          if (existingDirect.has(key)) {
-            throw new Error(`Relationship already exists: ${targetScholar.canonical_name} is already your ${type}.`);
-          }
-
-          if (existingInverse.has(key)) {
-            const invType = type === 'teacher' ? 'student' : 'teacher';
-            throw new Error(`Bidirectional conflict: ${targetScholar.canonical_name} is already recorded as your ${invType}.`);
-          }
-
+          if (existingDirect.has(key)) throw new Error(`Relationship already exists: ${targetScholar.canonical_name} is already your ${rel.relation_type}.`);
+          if (existingInverse.has(key)) throw new Error(`Bidirectional conflict: ${targetScholar.canonical_name} is already recorded as your ${rel.relation_type === 'teacher' ? 'student' : 'teacher'}.`);
           validatedNewRels.push(rel);
         }
-
         for (const rel of validatedNewRels) {
-          await tx.scholar_relationships.create({
-            data: {
-              version_id: version.version_id,
-              related_version_id: parseInt(rel.related_version_id),
-              relation_type: rel.relation_type,
-            },
+          await tx.scholar_relationships.create({ data: { version_id: version.version_id, related_version_id: parseInt(rel.related_version_id), relation_type: rel.relation_type } });
+        }
+      }
+
+      await tx.scholar_contributors.upsert({ where: { scholar_id_user_id: { scholar_id: scholarId, user_id: userId } }, create: { scholar_id: scholarId, user_id: userId }, update: {} });
+
+      // ✅ ADMIN AUTO-APPROVE LOGIC: Carry over old data & approve new data
+      if (initialStatus === "approved") {
+        const oldApproved = await tx.scholar_versions.findFirst({
+          where: { scholar_id: scholarId, language_id: parsedLanguageId, status: "approved", version_id: { not: version.version_id } },
+          orderBy: { created_at: "desc" }
+        });
+
+        if (oldApproved) {
+          // 1. Move all related data to the new version
+          await tx.media.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
+          await tx.scholar_works.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
+          await tx.scholar_references.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
+          await tx.scholar_relationships.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
+          await tx.img_versions.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
+          await tx.comments.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } }); // ✅ COMMENTS CARRIED OVER
+
+          // 2. Supersede the old version
+          await tx.scholar_versions.update({ where: { version_id: oldApproved.version_id }, data: { status: "superseded" } });
+        }
+
+        // 3. Approve any NEW pending items added in this edit
+        await tx.scholar_references.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+        await tx.scholar_works.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+        await tx.media.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+        await tx.img_versions.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
+
+        // 4. Sync the image to scholar_versions if an image was uploaded in this edit
+        const approvedImage = await tx.img_versions.findFirst({ where: { version_id: version.version_id, status: "approved" }, orderBy: { created_at: 'desc' } });
+        if (approvedImage) {
+          await tx.scholar_versions.update({
+            where: { version_id: version.version_id },
+            data: { image_url: approvedImage.image_url, image_status: "approved", image_uploaded_by: approvedImage.uploaded_by }
           });
         }
       }
 
-      await tx.scholar_contributors.upsert({
-        where: { scholar_id_user_id: { scholar_id: scholarId, user_id: userId } },
-        create: { scholar_id: scholarId, user_id: userId },
-        update: {},
-      });
-
       return version;
     });
 
-    // ✅ 3. POST-TRANSACTION: Handle Image Upload for Edit
-    // TREAT IMAGE EXACTLY LIKE MEDIA/WORKS: Only upload to img_versions.
-    // DO NOT update scholar_versions yet. This protects the old image until approval.
+    // ✅ POST-TRANSACTION: Handle Image Upload for Edit
     const sideEffectErrors = [];
     let imageResult = null;
     const imageFile = filesByField["image"];
     
     if (imageFile) {
       console.log("🖼️ ATTEMPTING TO UPLOAD IMAGE:", imageFile.originalname);
-      
       try {
-        imageResult = await uploadScholarImageService({ 
-          version_id: newVersion.version_id, 
-          file: imageFile, 
-          uploaded_by: userId 
-        });
-        // ✅ REMOVED: prisma.scholar_versions.update block. 
-        // The image now lives safely in img_versions until the admin approves it.
+        imageResult = await uploadScholarImageService({ version_id: newVersion.version_id, file: imageFile, uploaded_by: userId });
+        
+        // ✅ IF ADMIN, APPROVE THE NEW IMAGE IMMEDIATELY AND SYNC IT
+        if (initialStatus === "approved") {
+          await prisma.img_versions.updateMany({ where: { version_id: newVersion.version_id, status: "pending" }, data: { status: "approved" } });
+          await prisma.scholar_versions.update({
+            where: { version_id: newVersion.version_id },
+            data: { image_url: imageResult.image_url, image_status: "approved", image_uploaded_by: userId }
+          });
+        }
       } catch (err) {
         sideEffectErrors.push({ type: "image", message: err.message });
       }
@@ -1338,32 +1169,20 @@ exports.editScholar = async (req, res) => {
     if (admins.length > 0) {
       await prisma.notifications.createMany({
         data: admins.map((admin) => ({
-          user_id: admin.id,
-          type: "EDIT_PROPOSAL",
+          user_id: admin.id, type: "EDIT_PROPOSAL",
           message: `Edit proposed for scholar ID ${scholarId} ("${finalCanonicalName}")`,
-          related_entity: `scholar_version:${newVersion.version_id}`,
-          is_read: false,
-          created_at: new Date(),
+          related_entity: `scholar_version:${newVersion.version_id}`, is_read: false, created_at: new Date(),
         })),
       });
     }
 
-    // ✅ 4. Return response with image result and any warnings
     res.json({
-      success: true,
-      message: "Edit submitted for review",
+      success: true, message: "Edit submitted for review",
       data: {
-        newVersion: newVersion,
-        image: imageResult || null, // ✅ Now returns the uploaded image data
-        carriedOverContent: {
-          works: previousVersion.scholar_works,
-          media: previousVersion.media,
-          references: previousVersion.scholar_references,
-          dates: previousVersion.scholar_dates,
-          relationships: previousVersion.scholar_relationships_as_source,
-        }
+        newVersion: newVersion, image: imageResult || null,
+        carriedOverContent: { works: previousVersion.scholar_works, media: previousVersion.media, references: previousVersion.scholar_references, dates: previousVersion.scholar_dates, relationships: previousVersion.scholar_relationships_as_source }
       },
-      warnings: sideEffectErrors.length > 0 ? sideEffectErrors : undefined, // ✅ Exposes hidden errors
+      warnings: sideEffectErrors.length > 0 ? sideEffectErrors : undefined,
     });
 
   } catch (error) {

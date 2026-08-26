@@ -1,22 +1,13 @@
 const { createWorkService } = require("../service/works.service");
 const prisma = require("../config/db");
+const { promoteUserToContributor, isAdminUser } = require("../service/role.service");
 
 
 // ======================================================
 // Create Work
 // ======================================================
 exports.createWork = async (req, res) => {
-  const {
-    version_id,
-    title,
-    year,
-    format,
-    description,
-    media_url,
-    
-  } = req.body;
-
- 
+  const { version_id, title, year, format, description, media_url } = req.body;
 
   if (!version_id || !title || !format) {
     return res.status(400).json({
@@ -24,11 +15,12 @@ exports.createWork = async (req, res) => {
       message: "version_id, title and format are required",
     });
   }
+  
   const userId = req.user.id;
   const user = await prisma.users.findUnique({ where: { id: userId } });
-   if (!user || !user.allowed_to_contribute) {
-       return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
-    }
+  if (!user || !user.allowed_to_contribute) {
+    return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
+  }
 
   try {
     const work = await createWorkService({
@@ -38,29 +30,38 @@ exports.createWork = async (req, res) => {
       format,
       description,
       media_url,
-      created_by:userId,
+      created_by: userId,
       file: req.file,
     });
+
+    // ✅ ADMIN AUTO-APPROVE WORK
+    const isUserAdmin = await isAdminUser(userId);
+    if (isUserAdmin) {
+      await prisma.scholar_works.update({
+        where: { work_id: work.work_id },
+        data: { status: "approved" }
+      });
+    }
 
     res.status(201).json({
       success: true,
       data: work,
     });
 
-  }   catch (error) {
-  console.error("createWork error:", error);
+  } catch (error) {
+    console.error("createWork error:", error);
 
-  if (error.message === "Scholar version not found") {
-    return res.status(404).json({
+    if (error.message === "Scholar version not found") {
+      return res.status(404).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
+    return res.status(400).json({
       success: false,
-      message: error.message,
+      message: error.message || "Work creation failed",
     });
-  }
-
-  return res.status(400).json({
-    success: false,
-    message: error.message || "Work creation failed",
-  });
   }
 };
 // ======================================================
@@ -124,7 +125,7 @@ exports.createWork = async (req, res) => {
     });
 
     // -----------------------------------------
-    // Notification
+    // Notification & Auto-Promotion
     // -----------------------------------------
 
     if (work.created_by) {
@@ -138,6 +139,10 @@ exports.createWork = async (req, res) => {
           created_at: new Date(),
         },
       });
+
+      // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
+      // This checks if they are a basic "user" and upgrades them automatically!
+      await promoteUserToContributor(work.created_by);
     }
 
     return res.json({

@@ -1,4 +1,5 @@
  const prisma = require("../config/db");
+ const { promoteUserToContributor, demoteAndBanUser } = require("../service/role.service");
 
 exports.getPendingCreatedScholars = async (req, res) => {
   try {
@@ -273,18 +274,9 @@ exports.approveScholar = async (req, res) => {
       });
     }
 
-    // 3. Promote user to contributor role (if not already)
-    const contributorRole = await prisma.roles.findFirst({
-      where: { role_name: "contributor" },
-      select: { role_id: true },
-    });
-
-    if (contributorRole && version.created_by) {
-      await prisma.users.update({
-        where: { id: version.created_by },
-        data: { role_id: contributorRole.role_id },
-      });
-    }
+    // 3. ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
+    // This single line checks if they are a basic "user" and upgrades them automatically!
+    await promoteUserToContributor(version.created_by);
 
     return res.json({ success: true, message: "Scholar approved", data: updated });
   } catch (error) {
@@ -574,6 +566,22 @@ exports.getDashboardStats = async (req, res) => {
 
   } catch (error) {
     console.error("getDashboardStats error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// Ban and Demote User (Admin only)
+exports.banUser = async (req, res) => {
+  const userId = parseInt(req.params.id);
+
+  try {
+    await demoteAndBanUser(userId);
+    res.json({ 
+      success: true, 
+      message: "User has been demoted to basic user, banned, and blocked from contributing." 
+    });
+  } catch (error) {
+    console.error("banUser error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

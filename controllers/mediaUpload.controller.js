@@ -1,7 +1,7 @@
 const { cloudinary } = require("../config/cloudinary");
 const prisma = require("../config/db");
 const { uploadMediaService } = require("../service/media.service");
-
+const { promoteUserToContributor, isAdminUser } = require("../service/role.service");
 // ======================================================
 // Upload Media
 // ======================================================
@@ -12,14 +12,7 @@ const { uploadMediaService } = require("../service/media.service");
 // one place that logic lives.
 
 const uploadMedia = async (req, res) => {
-  const {
-    version_id,
-    media_url,
-    title,
-    year,
-    description,
-  } = req.body;
-
+  const { version_id, media_url, title, year, description } = req.body;
   const userId = req.user.id;
   const file = req.file;
 
@@ -28,6 +21,12 @@ const uploadMedia = async (req, res) => {
       success: false,
       message: "version_id is required",
     });
+  }
+
+  // ✅ Check if user is allowed to contribute
+  const user = await prisma.users.findUnique({ where: { id: userId } });
+  if (!user || !user.allowed_to_contribute) {
+    return res.status(403).json({ success: false, message: "You are not allowed to contribute" });
   }
 
   try {
@@ -41,6 +40,15 @@ const uploadMedia = async (req, res) => {
       userId,
     });
 
+    // ✅ ADMIN AUTO-APPROVE MEDIA
+    const isUserAdmin = await isAdminUser(userId);
+    if (isUserAdmin) {
+      await prisma.media.update({
+        where: { media_id: media.media_id },
+        data: { status: "approved" }
+      });
+    }
+
     res.status(201).json({
       success: true,
       data: media,
@@ -49,8 +57,6 @@ const uploadMedia = async (req, res) => {
   } catch (error) {
     console.error("uploadMedia error:", error);
 
-    // uploadMediaService throws plain Errors for not-found / status-guard /
-    // validation cases — surface those as 400s instead of a blanket 500.
     if (error.message === "Scholar version not found") {
       return res.status(404).json({ success: false, message: error.message });
     }
@@ -123,7 +129,7 @@ const approveMedia = async (req, res) => {
     });
 
     // -----------------------------------------
-    // Notification
+    // Notification & Auto-Promotion
     // -----------------------------------------
 
     if (media.uploaded_by) {
@@ -142,6 +148,10 @@ const approveMedia = async (req, res) => {
           created_at: new Date(),
         },
       });
+
+      // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
+      // This checks if they are a basic "user" and upgrades them automatically!
+      await promoteUserToContributor(media.uploaded_by);
     }
 
     return res.json({

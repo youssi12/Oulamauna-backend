@@ -332,7 +332,7 @@ model users {
   username              String?               @unique(map: "username") @db.VarChar(255)
   email                 String?               @unique(map: "email") @db.VarChar(255)
   password_hash         String?               @db.VarChar(255)
-  role_id               Int?                  @default(3)
+  role_id               Int?                  
   is_banned             Boolean?              @default(false)
   created_at            DateTime?             @db.Timestamp(0)
   email_verified        Boolean               @default(false)

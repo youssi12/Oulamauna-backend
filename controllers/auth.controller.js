@@ -25,8 +25,28 @@ exports.register = async (req, res) => {
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
 
+    // ✅ STEP 1: Find the "user" role (role_id = 3 based on your screenshot)
+    const userRole = await prisma.roles.findFirst({
+      where: { role_name: "user" }
+    });
+
+    if (!userRole) {
+      console.error("❌ ERROR: 'user' role not found in database!");
+      return res.status(500).json({ message: "System configuration error" });
+    }
+
+    // ✅ STEP 2: Create user with ALL required fields
     const user = await prisma.users.create({
-      data: { username, email, password_hash: hashedPassword, created_at: new Date() }
+      data: { 
+        username, 
+        email, 
+        password_hash: hashedPassword, 
+        created_at: new Date(),
+        role_id: userRole.role_id,        // 👈 SETS role_id to 3
+        allowed_to_contribute: true,      // 👈 SETS to true
+        is_banned: false,                 // 👈 SETS to false (0)
+        email_verified: false             // 👈 SETS to false
+      }
     });
 
     const token = crypto.randomBytes(32).toString("hex");
@@ -39,6 +59,7 @@ exports.register = async (req, res) => {
     await sendVerificationEmail(email, token);
     res.status(201).json({ message: "User created successfully" });
   } catch (error) {
+    console.error(" Registration Error:", error);
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
