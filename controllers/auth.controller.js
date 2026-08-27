@@ -119,28 +119,31 @@ exports.login = async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
     return res.status(400).json({ message: "Please enter all values" });
-  console.log(await prisma.users.findMany());
- 
+
   try {
- 
-    const user = await prisma.users.findUnique({ where: { email } });
-    console.log(user)
+    // ✅ UPDATED: Added 'include: { roles: true }' to fetch the role name
+    const user = await prisma.users.findUnique({ 
+      where: { email },
+      include: { roles: true } 
+    });
+    
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
-if (user.is_banned)
-  return res.status(403).json({ message: "Your account has been banned" });
+    if (user.is_banned)
+      return res.status(403).json({ message: "Your account has been banned" });
 
-const match = await bcrypt.compare(password, user.password_hash);
+    const match = await bcrypt.compare(password, user.password_hash);
 
-if (!match)
-  return res.status(401).json({ message: "Invalid credentials" });
+    if (!match)
+      return res.status(401).json({ message: "Invalid credentials" });
 
-if (!user.email_verified)
-  return res.status(403).json({
-    message: "Please verify your email before logging in",
-    code: "EMAIL_NOT_VERIFIED",
-    email: user.email
-  });
+    if (!user.email_verified)
+      return res.status(403).json({
+        message: "Please verify your email before logging in",
+        code: "EMAIL_NOT_VERIFIED",
+        email: user.email
+      });
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role_id: user.role_id },
       process.env.JWT_SECRET,
@@ -148,7 +151,18 @@ if (!user.email_verified)
     );
 
     res.cookie("token", token, cookieOptions);
-    res.json({ token, user: { id: user.id, username: user.username, email: user.email } });
+    
+    // ✅ UPDATED: Added role_name and allowed_to_contribute to the response
+    res.json({ 
+      token, 
+      user: { 
+        id: user.id, 
+        username: user.username, 
+        email: user.email,
+        role_name: user.roles.role_name, 
+        allowed_to_contribute: user.allowed_to_contribute 
+      } 
+    });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -156,12 +170,25 @@ if (!user.email_verified)
 
 exports.getme = async (req, res) => {
   try {
+    // ✅ UPDATED: Changed 'select' to 'include' to get the role_name
     const user = await prisma.users.findUnique({
       where: { id: req.user.id },
-      select: { id: true, username: true, email: true, role_id: true, is_banned: true, created_at: true }
+      include: { 
+        roles: { select: { role_name: true } } 
+      }
     });
+    
     if (!user) return res.status(404).json({ message: "User not found" });
-    return res.json(user);
+    
+    // ✅ UPDATED: Return the specific fields the frontend needs
+    return res.json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role_name: user.roles.role_name,          
+      allowed_to_contribute: user.allowed_to_contribute, 
+      is_banned: user.is_banned
+    });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }

@@ -661,18 +661,36 @@ exports.getDraftById = async (req, res) => {
 exports.deleteDraft = async (req, res) => {
   const userId = req.user.id;
   const versionId = parseInt(req.params.versionId);
+  
   try {
-    const draft = await prisma.scholar_versions.findUnique({ where: { version_id: versionId } });
+    // 1. Check if the draft exists and belongs to the user
+    const draft = await prisma.scholar_versions.findUnique({ 
+      where: { version_id: versionId } 
+    });
 
     if (!draft || draft.status !== "draft" || draft.created_by !== userId) {
-      return res.status(404).json({ success: false, message: "Draft not found" });
+      return res.status(404).json({ success: false, message: "Draft not found or you don't have permission to delete it." });
     }
 
-    await prisma.scholar_versions.delete({ where: { version_id: versionId } });
-    res.json({ success: true, message: "Draft deleted" });
+    // 2. Safely delete all related records first to avoid foreign key constraint errors
+    await prisma.$transaction(async (tx) => {
+      await tx.scholar_aliases.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_dates.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_disciplines.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_works.deleteMany({ where: { version_id: versionId } });
+      await tx.media.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_references.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_relationships.deleteMany({ where: { version_id: versionId } });
+      
+      // 3. Finally, delete the draft version itself
+      await tx.scholar_versions.delete({ where: { version_id: versionId } });
+    });
+
+    res.json({ success: true, message: "Draft deleted successfully" });
   } catch (error) {
     console.error("deleteDraft error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    // ✅ Return the actual error message so you can see what went wrong if it fails again
+    res.status(500).json({ success: false, message: "Server error: " + error.message });
   }
 };
 

@@ -30,6 +30,7 @@ app.use("/api/img",require("./routes/scholarImage.route"))
 app.use("/api/discipline",require("./routes/discipline.route"))
 app.use("/api/region",require("./routes/regions.route"))
 app.use("/api/date",require("./routes/dates.route"))
+app.use("/api/languages", require("./routes/language.route"));
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {
