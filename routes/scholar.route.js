@@ -20,6 +20,8 @@ router.get("/drafts", protect, scholarPage.getMyDrafts);
 router.get("/draft/:versionId", protect, scholarPage.getDraftById);
 router.delete("/draft/:versionId", protect, scholarPage.deleteDraft);
 router.post("/draft/:versionId/submit", protect, scholarPage.submitDraft);
+router.get("/version/:versionId", protect, scholarPage.getVersionById);
+
 
 router.get("/:id", scholarPage.getScholarById);             
 
@@ -28,5 +30,9 @@ router.patch("/:id", protect, uploadScholarBundle.any(), scholarPage.editScholar
 
 // ✅ ADD THIS: Relationships endpoint
 router.post("/relationships", protect, scholarPage.addScholarRelationship);
+
+// ✅ NEW: Dedicated routes for REJECTED versions (Must be ABOVE /:id)
+router.put("/rejected/:versionId", protect, scholarPage.updateRejectedVersion);
+router.delete("/rejected/:versionId", protect, scholarPage.deleteRejectedVersion);
 
 module.exports = router;

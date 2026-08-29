@@ -1265,6 +1265,47 @@ exports.getMySubmissions = async (req, res) => {
   }
 };
 
+exports.getVersionById = async (req, res) => {
+  const versionId = parseInt(req.params.versionId);
+  const userId = req.user.id;
+
+  try {
+    // Fetch the specific version with ALL its related data
+    const version = await prisma.scholar_versions.findUnique({
+      where: { version_id: versionId },
+      include: {
+        scholars: true,
+        languages: true,
+        scholar_aliases: true,
+        scholar_dates: true,
+        scholar_disciplines: { include: { disciplines: true } },
+        scholar_works: true,
+        media: true,
+        scholar_references: true,
+        scholar_relationships_as_source: { 
+          include: { related_scholar_version: { include: { languages: true } } } 
+        },
+      },
+    });
+
+    if (!version) {
+      return res.status(404).json({ success: false, message: "Version not found" });
+    }
+
+    // Security: Ensure the user owns this version
+    if (version.created_by !== userId) {
+      return res.status(403).json({ success: false, message: "You do not have permission to view this version" });
+    }
+
+    res.json({ success: true, data: version });
+  } catch (error) {
+    console.error("getVersionById error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+
 exports.getScholarByName = async (req, res) => {
   const {
     q,
@@ -1515,5 +1556,139 @@ exports.addScholarRelationship = async (req, res) => {
   } catch (error) {
     console.error("addScholarRelationship error:", error);
     return res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+// ============================================================
+// REJECTED SYSTEM — Dedicated routes for Rejected versions
+// ============================================================
+
+exports.updateRejectedVersion = async (req, res) => {
+  const versionId = parseInt(req.params.versionId);
+  const userId = req.user.id;
+
+  let payload;
+  try {
+    payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+    if (req.body.data) payload = JSON.parse(req.body.data);
+  } catch (err) {
+    return res.status(400).json({ success: false, message: "Invalid JSON in payload" });
+  }
+
+  const targetStatus = payload.target_status === "draft" ? "draft" : "pending";
+  const { canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, dates, biography, language_id, discipline_ids, references, works, media, relationships } = payload;
+
+  try {
+    // 1. STRICT CHECK: Must exist, MUST be "rejected", must belong to user
+    const version = await prisma.scholar_versions.findUnique({ where: { version_id: versionId } });
+    if (!version) return res.status(404).json({ success: false, message: "Version not found" });
+    if (version.status !== "rejected") return res.status(400).json({ success: false, message: "This version is not rejected." });
+    if (version.created_by !== userId) return res.status(403).json({ success: false, message: "Permission denied." });
+
+    // 2. Basic Validation
+    if (!canonical_name) return res.status(400).json({ success: false, message: "canonical_name is required" });
+    if (!biography) return res.status(400).json({ success: false, message: "biography is required" });
+
+    // 3. Update everything in a single transaction
+    await prisma.$transaction(async (tx) => {
+      // Update main version and change status to target_status (draft or pending)
+      await tx.scholar_versions.update({
+        where: { version_id: versionId },
+        data: {
+          canonical_name: canonical_name || null,
+          region_id: region_id ? parseInt(region_id) : null,
+          century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
+          century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
+          century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
+          century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
+          biography: biography || null,
+          status: targetStatus, // ✅ Main version CAN be "draft" or "pending"
+        }
+      });
+
+      // Delete old related data for this specific version_id
+      await tx.scholar_aliases.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_dates.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_disciplines.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_works.deleteMany({ where: { version_id: versionId } });
+      await tx.media.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_references.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_relationships.deleteMany({ where: { version_id: versionId } });
+
+      // Insert new related data
+      if (aliases?.length) await tx.scholar_aliases.createMany({ data: aliases.map((a) => ({ version_id: versionId, alias_name: a })) });
+      if (dates?.length) await tx.scholar_dates.createMany({ data: dates.map((d) => ({ version_id: versionId, date_type: d.date_type, calendar: d.calendar, year: d.year ? parseInt(d.year) : null, raw_text: d.raw_text || null })) });
+      if (discipline_ids?.length) await tx.scholar_disciplines.createMany({ data: discipline_ids.map((did) => ({ version_id: versionId, discipline_id: did })), skipDuplicates: true });
+      
+      // ✅ FIX: Works, Media, and References do NOT support "draft" status. 
+      // We must hardcode "pending" for them to satisfy Prisma's enum requirements.
+      if (works?.length) await tx.scholar_works.createMany({ data: works.map((w) => ({ version_id: versionId, title: w.title || "", year: w.year ? parseInt(w.year) : null, format: w.format || "OTHER", description: w.description || null, media_url: w.media_url || null, created_by: userId, status: "pending" })) });
+      if (media?.length) await tx.media.createMany({ data: media.map((m) => ({ version_id: versionId, title: m.title || "", year: m.year ? parseInt(m.year) : null, description: m.description || null, media_url: m.media_url || null, uploaded_by: userId, status: "pending" })) });
+      if (references?.length) await tx.scholar_references.createMany({ data: references.map((r) => ({ version_id: versionId, title: r.title || "", citation: r.citation || "", url: r.url || null, created_by: userId, status: "pending" })) });
+      
+      if (relationships?.length) {
+        for (const rel of relationships) {
+          await tx.scholar_relationships.create({ data: { version_id: versionId, related_version_id: parseInt(rel.related_version_id), relation_type: rel.relation_type } });
+        }
+      }
+    });
+
+    // 4. Notify admins ONLY if resubmitting to pending
+    if (targetStatus === "pending") {
+      const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+      if (admins.length > 0) {
+        await prisma.notifications.createMany({
+          data: admins.map((admin) => ({
+            user_id: admin.id,
+            type: "RESUBMITTED_SCHOLAR",
+            message: `A rejected scholar version (ID: ${versionId}) has been resubmitted for review: "${canonical_name}"`,
+            related_entity: `scholar_version:${versionId}`,
+            is_read: false,
+            created_at: new Date(),
+          })),
+        });
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: targetStatus === "draft" ? "Saved as draft" : "Resubmitted for review", 
+      data: { version_id: versionId } 
+    });
+
+  } catch (error) {
+    console.error("updateRejectedVersion error:", error);
+    res.status(500).json({ success: false, message: "Server error: " + error.message });
+  }
+};
+
+exports.deleteRejectedVersion = async (req, res) => {
+  const versionId = parseInt(req.params.versionId);
+  const userId = req.user.id;
+  
+  try {
+    // 1. STRICT CHECK: Must be "rejected" and belong to user
+    const version = await prisma.scholar_versions.findUnique({ where: { version_id: versionId } });
+    if (!version || version.status !== "rejected" || version.created_by !== userId) {
+      return res.status(404).json({ success: false, message: "Rejected version not found or permission denied." });
+    }
+
+    // 2. Safely delete all related records first
+    await prisma.$transaction(async (tx) => {
+      await tx.scholar_aliases.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_dates.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_disciplines.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_works.deleteMany({ where: { version_id: versionId } });
+      await tx.media.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_references.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_relationships.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_versions.delete({ where: { version_id: versionId } });
+    });
+
+    res.json({ success: true, message: "Rejected version deleted successfully" });
+  } catch (error) {
+    console.error("deleteRejectedVersion error:", error);
+    res.status(500).json({ success: false, message: "Server error: " + error.message });
   }
 };

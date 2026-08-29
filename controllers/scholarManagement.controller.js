@@ -8,12 +8,8 @@ exports.getPendingCreatedScholars = async (req, res) => {
         status: "pending",
         version_type: "creation",
       },
-
       include: {
-        // Main scholar
         scholars: true,
-
-        // Contributor
         users: {
           select: {
             id: true,
@@ -21,36 +17,34 @@ exports.getPendingCreatedScholars = async (req, res) => {
             email: true,
           },
         },
-
-        // Language
         languages: true,
-
-        // Region
         regions: true,
-
-        // Scholar data
         scholar_aliases: true,
         scholar_dates: true,
-
-        // References + status
         scholar_references: true,
-
-        // Works + status
         scholar_works: true,
-
-        // Media + status
         media: true,
-
-        // FIX: image proposals for this version weren't included here.
-        // A brand-new "creation" version can have its own pending image
-        // proposal (uploaded via POST /api/img alongside the initial
-        // submission), and the admin reviewing this queue previously had
-        // no visibility into it without separately hitting
-        // GET /api/admin/img/pending. Added for consistency with how
-        // works/media/references are already shown inline here.
         img_versions: true,
+        
+        // ✅ This is the EXACT syntax that works in your getPublishedScholars function
+        scholar_disciplines: {
+          include: {
+            disciplines: true,
+          },
+        },
+        
+        // ✅ ADDED: Relationships so the admin can see them during review
+        scholar_relationships_as_source: {
+          include: {
+            related_scholar_version: {
+              include: {
+                scholars: true,
+                languages: true,
+              }
+            }
+          }
+        },
       },
-
       orderBy: {
         created_at: "asc",
       },
@@ -60,14 +54,104 @@ exports.getPendingCreatedScholars = async (req, res) => {
       success: true,
       data: pending,
     });
-
   } catch (error) {
+    // 👇 THIS IS THE LINE THAT PRINTS THE ACTUAL ERROR WE NEED TO SEE
     console.error("getPendingCreatedScholars error:", error);
-
     res.status(500).json({
       success: false,
       message: "Server error",
     });
+  }
+};
+
+exports.getDashboardStats = async (req, res) => {
+  try {
+    const now = new Date();
+    const threeDaysAgo = new Date(now - 3 * 24 * 60 * 60 * 1000);
+    const startOfWeek = new Date(now);
+    startOfWeek.setDate(now.getDate() - now.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+    const startOfToday = new Date(now);
+    startOfToday.setHours(0, 0, 0, 0);
+
+    const [
+      totalPending,
+      overdue,
+      newToday,
+      thisWeek,
+      // ✅ ADD THIS: Fetch reviewed scholars to calculate average time
+      reviewedScholars
+    ] = await Promise.all([
+      // Total pending (creation only)
+      prisma.scholar_versions.count({
+        where: { status: "pending", version_type: "creation" }
+      }),
+
+      // Overdue: pending for more than 3 days
+      prisma.scholar_versions.count({
+        where: {
+          status: "pending",
+          version_type: "creation",
+          created_at: { lt: threeDaysAgo }
+        }
+      }),
+
+      // New today
+      prisma.scholar_versions.count({
+        where: {
+          status: "pending",
+          version_type: "creation",
+          created_at: { gte: startOfToday }
+        }
+      }),
+
+      // This week: approved/rejected this week
+      prisma.scholar_versions.count({
+        where: {
+          status: { in: ["approved", "rejected"] },
+          version_type: "creation",
+          created_at: { gte: startOfWeek }
+        }
+      }),
+
+      // ✅ Fetch recently reviewed scholars to calculate avg time
+      prisma.scholar_versions.findMany({
+        where: {
+          status: { in: ["approved", "rejected"] },
+          version_type: "creation",
+          created_at: { gte: startOfWeek }
+        },
+        select: { created_at: true }
+      })
+    ]);
+
+    // ✅ Calculate average review time dynamically
+    let avgReviewTime = "0h 0m";
+    if (reviewedScholars.length > 0) {
+      const totalHours = reviewedScholars.reduce((sum, scholar) => {
+        const createdAt = new Date(scholar.created_at);
+        return sum + (now - createdAt) / (1000 * 60 * 60);
+      }, 0);
+      
+      const avgHours = Math.floor(totalHours / reviewedScholars.length);
+      const avgMinutes = Math.round(((totalHours / reviewedScholars.length) % 1) * 60);
+      avgReviewTime = `${avgHours}h ${avgMinutes}m`;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        total_pending: totalPending,
+        overdue,
+        new_today: newToday,
+        this_week: thisWeek,
+        avg_review_time: avgReviewTime, // ✅ Send real data to frontend
+      }
+    });
+
+  } catch (error) {
+    console.error("getDashboardStats error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -80,10 +164,28 @@ exports.getPendingEditedScholars = async (req, res) => {
         scholars: true,
         users: { select: { id: true, username: true, email: true } },
         languages: true,
-        scholar_aliases: true,
         regions: true,
-        // ✅ ADDED: The pending edition NOW owns the proposed image in img_versions
-        img_versions: true, 
+        scholar_aliases: true,
+        scholar_dates: true,           // ✅ ADDED: To detect date changes
+        scholar_references: true,      // ✅ ADDED: To detect reference changes
+        scholar_works: true,           // ✅ ADDED: To detect work changes
+        media: true,                   // ✅ ADDED: To detect media changes
+        img_versions: true,            // ✅ ADDED: To detect image changes
+        scholar_disciplines: {         // ✅ ADDED: To detect discipline changes
+          include: {
+            disciplines: true,
+          },
+        },
+        scholar_relationships_as_source: { // ✅ ADDED: To detect relationship changes
+          include: {
+            related_scholar_version: {
+              include: {
+                scholars: true,
+                languages: true,
+              }
+            }
+          }
+        },
       },
       orderBy: { created_at: "asc" }
     });
@@ -208,27 +310,67 @@ exports.approveScholar = async (req, res) => {
         }
       }
 
-      // ✅ Automatically approve any NEW pending references, works, or media 
-      // that were submitted alongside this edit proposal.
-      await tx.scholar_references.updateMany({
-        where: { version_id: versionId, status: "pending" },
-        data: { status: "approved" },
-      });
+      // ==========================================================
+      // ✅ NEW GRANULAR APPROVAL LOGIC (Handles Mixed Scenarios)
+      // ==========================================================
+      const { 
+        reject_images = [], 
+        reject_works = [], 
+        reject_references = [], 
+        reject_media = [] 
+      } = req.body || {};
 
-      await tx.scholar_works.updateMany({
-        where: { version_id: versionId, status: "pending" },
-        data: { status: "approved" },
-      });
-
-      await tx.media.updateMany({
-        where: { version_id: versionId, status: "pending" },
-        data: { status: "approved" },
-      });
-            // ✅ Also approve the pending image proposal
+      // --- IMAGES --- (Kept exactly as is)
+      if (reject_images.length > 0) {
+        await tx.img_versions.updateMany({
+          where: { version_id: versionId, img_version_id: { in: reject_images } },
+          data: { status: "rejected" },
+        });
+      }
       await tx.img_versions.updateMany({
-        where: { version_id: versionId, status: "pending" },
+        where: { version_id: versionId, status: "pending", img_version_id: { notIn: reject_images } },
         data: { status: "approved" },
       });
+
+      // --- WORKS --- (ONLY run for "creation" so editions keep original status)
+      if (version.version_type === "creation") {
+        if (reject_works.length > 0) {
+          await tx.scholar_works.updateMany({
+            where: { version_id: versionId, work_id: { in: reject_works } },
+            data: { status: "rejected" },
+          });
+        }
+        await tx.scholar_works.updateMany({
+          where: { version_id: versionId, status: "pending", work_id: { notIn: reject_works } },
+          data: { status: "approved" },
+        });
+      }
+
+      // --- REFERENCES --- (Kept exactly as is)
+      if (reject_references.length > 0) {
+        await tx.scholar_references.updateMany({
+          where: { version_id: versionId, reference_id: { in: reject_references } },
+          data: { status: "rejected" },
+        });
+      }
+      await tx.scholar_references.updateMany({
+        where: { version_id: versionId, status: "pending", reference_id: { notIn: reject_references } },
+        data: { status: "approved" },
+      });
+
+      // --- MEDIA --- (ONLY run for "creation" so editions keep original status)
+      if (version.version_type === "creation") {
+        if (reject_media.length > 0) {
+          await tx.media.updateMany({
+            where: { version_id: versionId, media_id: { in: reject_media } },
+            data: { status: "rejected" },
+          });
+        }
+        await tx.media.updateMany({
+          where: { version_id: versionId, status: "pending", media_id: { notIn: reject_media } },
+          data: { status: "approved" },
+        });
+      }
 
       // ✅ Find the newly approved image to sync it to scholar_versions
       const approvedImage = await tx.img_versions.findFirst({
@@ -323,16 +465,10 @@ exports.rejectScholar = async (req, res) => {
                 },
                 data: {
                     status: "rejected",
-                    // FIX: removed the old
-                    //   image_status: version.image_status === "pending" ? "rejected" : version.image_status
-                    // line. Under the img_versions design, scholar_versions.
-                    // image_status is only ever written by approveScholarImage
-                    // (as a cache of whichever proposal is currently approved)
-                    // — uploadScholarImageService never sets it to "pending",
-                    // so `version.image_status === "pending"` could never be
-                    // true here. This was dead code that silently did
-                    // nothing; the actual pending image proposal (if any)
-                    // lives in img_versions and is handled in step 2 below.
+                    // ✅ CLEAR CACHED IMAGE DATA WHEN REJECTING THE SCHOLAR
+                    image_url: null,
+                    image_status: null,
+                    image_uploaded_by: null,
                 },
             });
 
@@ -341,20 +477,23 @@ exports.rejectScholar = async (req, res) => {
             //
             // IMPORTANT:
             // Only pending children are rejected.
-            //
             // Approved children are NEVER touched because they may
             // belong to the currently live/approved content.
+            // For editions, works and media keep their original status.
             // ======================================================
 
-            await tx.scholar_works.updateMany({
-                where: {
-                    version_id: versionId,
-                    status: "pending",
-                },
-                data: {
-                    status: "rejected",
-                },
-            });
+            // --- WORKS --- (ONLY run for "creation")
+            if (version.version_type === "creation") {
+                await tx.scholar_works.updateMany({
+                    where: {
+                        version_id: versionId,
+                        status: "pending",
+                    },
+                    data: {
+                        status: "rejected",
+                    },
+                });
+            }
 
             await tx.scholar_references.updateMany({
                 where: {
@@ -366,15 +505,18 @@ exports.rejectScholar = async (req, res) => {
                 },
             });
 
-            await tx.media.updateMany({
-                where: {
-                    version_id: versionId,
-                    status: "pending",
-                },
-                data: {
-                    status: "rejected",
-                },
-            });
+            // --- MEDIA --- (ONLY run for "creation")
+            if (version.version_type === "creation") {
+                await tx.media.updateMany({
+                    where: {
+                        version_id: versionId,
+                        status: "pending",
+                    },
+                    data: {
+                        status: "rejected",
+                    },
+                });
+            }
 
             // FIX: pending image proposals attached to this version were
             // never rejected — an img_versions row in "pending" status is

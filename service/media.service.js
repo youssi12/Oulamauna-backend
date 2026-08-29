@@ -72,23 +72,14 @@ exports.uploadMediaService = async ({
       file_type: typeMap[file.mimetype] || "pdf",
       source_type: "upload",
     };
-  } else {
-    let file_type = "video";
-
-    const lower = media_url.toLowerCase();
-
-    if (lower.endsWith(".pdf")) file_type = "pdf";
-    else if (
-      lower.endsWith(".mp3") ||
-      lower.endsWith(".wav") ||
-      lower.endsWith(".ogg")
-    )
-      file_type = "audio";
-
+  }    else {
+    // ✅ For external links, file_type should be NULL
     mediaData = {
       ...mediaData,
       media_url,
-      file_type,
+      file_type: null,  // ✅ CORRECT - it's a link, not a file!
+      file_path: null,  // ✅ Also NULL for links
+      file_name: null,  // ✅ Also NULL for links
       source_type: "external",
     };
   }
