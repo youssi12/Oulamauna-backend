@@ -39,7 +39,7 @@ exports.markNotificationRead = async (req, res) => {
   const userId = req.user.id;
   
   if (Number.isNaN(notificationId)){
-    res.status(400).json({message:"missing notification id"})
+    return res.status(400).json({message:"missing notification id"})
   }
 
   try {
