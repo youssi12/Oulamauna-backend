@@ -9,14 +9,18 @@ const {
   approveMedia,
   rejectMedia,
   deleteMedia,
-  updateMedia
-} = require("../controllers/mediaUpload.controller");
+  updateMedia,
+  toggleMediaLike,
+  registerMediaView
+} = require("../controllers/media.controller");
 
 const {
   uploadMedia: uploadMediaMiddleware,
 } = require("../config/cloudinary");
 
 const protect = require("../middlewares/auth.middleware");
+
+router.post("/media/:id/view", registerMediaView);     
 
 router.use(protect);
 
@@ -26,6 +30,8 @@ router.post( "/",uploadMediaMiddleware.single("file"), uploadMedia);
 router.put("/:media_id",updateMedia);
 // Get approved media for a scholar
 router.get("/:version_id", getScholarMedia);
+router.post("/media/:id/like",  toggleMediaLike);    
+      
 
  
 module.exports = router;

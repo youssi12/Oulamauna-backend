@@ -18,7 +18,6 @@ app.use(express.json())
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser()); 
 
-
 // ROUTES
 app.use('/api/auth',require("./routes/auth.route"));
 app.use("/api/admin",require("./routes/admin.route"));
@@ -31,6 +30,8 @@ app.use("/api/discipline",require("./routes/discipline.route"))
 app.use("/api/region",require("./routes/regions.route"))
 app.use("/api/date",require("./routes/dates.route"))
 app.use("/api/languages", require("./routes/language.route"));
+app.use("/api/users",require("./routes/user.route"))
+app.use("/api/notification",require("./routes/notification.route"))
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {

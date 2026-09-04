@@ -2,34 +2,31 @@ const prisma = require("../config/db");
 
 // Helper function to fetch roles dynamically from the database
 const getRoles = async () => {
-  const [userRole, contributorRole, adminRole] = await Promise.all([
+  const [userRole, adminRole] = await Promise.all([
     prisma.roles.findFirst({ where: { role_name: "user" } }),
-    prisma.roles.findFirst({ where: { role_name: "contributor" } }),
     prisma.roles.findFirst({ where: { role_name: "admin" } })
   ]);
-  return { userRole, contributorRole, adminRole };
+  return { userRole, adminRole };
 };
 
-// ✅ 1. AUTO-PROMOTE: Upgrades a "user" to "contributor"
+// ✅ 1. AUTO-PROMOTE: Gives a user the contributor badge (independent of role)
 const promoteUserToContributor = async (userId) => {
   if (!userId) return;
 
   try {
-    const user = await prisma.users.findUnique({ where: { id: userId }, select: { role_id: true } });
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { contributorBadge: true },
+    });
     if (!user) return;
 
-    const { userRole, contributorRole } = await getRoles();
-
-    // Only promote if they are currently a basic "user" and we found a "contributor" role
-    if (userRole && user.role_id === userRole.role_id && contributorRole) {
+    // Only update if they don't already have the badge
+    if (!user.contributorBadge) {
       await prisma.users.update({
         where: { id: userId },
-        data: { 
-          role_id: contributorRole.role_id,
-          allowed_to_contribute: true 
-        },
+        data: { contributorBadge: true },
       });
-      console.log(`✅ User ${userId} automatically promoted to Contributor!`);
+      console.log(`✅ User ${userId} awarded Contributor badge!`);
     }
   } catch (error) {
     console.error("Error promoting user:", error);
@@ -44,14 +41,26 @@ const isAdminUser = async (userId) => {
     if (!user) return false;
 
     const { adminRole } = await getRoles();
-    return adminRole && user.role_id === adminRole.role_id;
+    return !!(adminRole && user.role_id === adminRole.role_id);
   } catch (error) {
     console.error("Error checking admin status:", error);
     return false;
   }
 };
 
-// ✅ 3. BAN/DEMOTE: Downgrades a user and bans them
+// ✅ 2b. NEW: Checks if a user has the contributor badge
+const isContributor = async (userId) => {
+  if (!userId) return false;
+  try {
+    const user = await prisma.users.findUnique({ where: { id: userId }, select: { contributorBadge: true } });
+    return !!user?.contributorBadge;
+  } catch (error) {
+    console.error("Error checking contributor status:", error);
+    return false;
+  }
+};
+
+// ✅ 3. BAN/DEMOTE: Downgrades a user's role, bans them, and revokes contributor badge
 const demoteAndBanUser = async (userId) => {
   if (!userId) return;
   try {
@@ -61,9 +70,9 @@ const demoteAndBanUser = async (userId) => {
     await prisma.users.update({
       where: { id: userId },
       data: {
-        role_id: userRole.role_id,       // Downgrade to basic user
-        allowed_to_contribute: false,    // Block from submitting
-        is_banned: true                  // Lock out of the system
+        role_id: userRole.role_id,     // Downgrade to basic user role
+        contributorBadge: false,       // Revoke contributor badge
+        is_banned: true,               // Lock out of the system
       },
     });
   } catch (error) {
@@ -75,5 +84,6 @@ const demoteAndBanUser = async (userId) => {
 module.exports = {
   promoteUserToContributor,
   isAdminUser,
+  isContributor,
   demoteAndBanUser
 };

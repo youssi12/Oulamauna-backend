@@ -572,6 +572,103 @@ const updateMedia = async (req, res) => {
 };
 
 
+
+
+ 
+
+// ------------------------------------------------------------
+// 1. TOGGLE LIKE — like if not liked, unlike if already liked
+// ------------------------------------------------------------
+const toggleMediaLike = async (req, res) => {
+  const userId = req.user.id; // requires auth
+  const mediaId = parseInt(req.params.id, 10);
+
+  if (Number.isNaN(mediaId)) {
+    return res.status(400).json({ success: false, message: "Invalid media id" });
+  }
+
+  try {
+    const media = await prisma.media.findUnique({ where: { media_id: mediaId } });
+    if (!media) {
+      return res.status(404).json({ success: false, message: "Media not found" });
+    }
+
+    const existingLike = await prisma.media_likes.findUnique({
+      where: {
+        media_id_user_id: { media_id: mediaId, user_id: userId }, // Prisma's compound-unique key name
+      },
+    });
+
+    if (existingLike) {
+      // Already liked → unlike
+      const [, updatedMedia] = await prisma.$transaction([
+        prisma.media_likes.delete({
+          where: { media_id_user_id: { media_id: mediaId, user_id: userId } },
+        }),
+        prisma.media.update({
+          where: { media_id: mediaId },
+          data: { like_count: { decrement: 1 } },
+        }),
+      ]);
+
+      return res.json({
+        success: true,
+        liked: false,
+        like_count: updatedMedia.like_count,
+      });
+    } else {
+      // Not liked yet → like
+      const [, updatedMedia] = await prisma.$transaction([
+        prisma.media_likes.create({
+          data: { media_id: mediaId, user_id: userId, created_at: new Date() },
+        }),
+        prisma.media.update({
+          where: { media_id: mediaId },
+          data: { like_count: { increment: 1 } },
+        }),
+      ]);
+
+      return res.json({
+        success: true,
+        liked: true,
+        like_count: updatedMedia.like_count,
+      });
+    }
+  } catch (error) {
+    console.error("toggleMediaLike error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ------------------------------------------------------------
+// 2. VIEW COUNT — increment on view, no auth required
+// ------------------------------------------------------------
+const registerMediaView = async (req, res) => {
+  const mediaId = parseInt(req.params.id, 10);
+
+  if (Number.isNaN(mediaId)) {
+    return res.status(400).json({ success: false, message: "Invalid media id" });
+  }
+
+  try {
+    const updatedMedia = await prisma.media.update({
+      where: { media_id: mediaId },
+      data: { view_count: { increment: 1 } },
+      select: { media_id: true, view_count: true },
+    });
+
+    res.json({ success: true, view_count: updatedMedia.view_count });
+  } catch (error) {
+    if (error.code === "P2025") {
+      // Prisma's "record not found" error for update
+      return res.status(404).json({ success: false, message: "Media not found" });
+    }
+    console.error("registerMediaView error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
 module.exports = {
   uploadMedia,
   approveMedia,
@@ -579,5 +676,8 @@ module.exports = {
   deleteMedia,
   getPendingMedia,
   getScholarMedia,
-  updateMedia
+  updateMedia,
+  toggleMediaLike,
+  registerMediaView
+  
 };

@@ -7,48 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model bibliography {
-  bibliography_id Int       @id @default(autoincrement())
-  scholar_id      Int?
-  title           String?   @db.VarChar(255)
-  citation        String?   @db.Text
-  url             String?   @db.VarChar(255)
-  created_by      Int?
-  created_at      DateTime? @db.Timestamp(0)
-  scholars        scholars? @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "bibliography_ibfk_1")
-  users           users?    @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "bibliography_ibfk_2")
-
-  @@index([created_by], map: "created_by")
-  @@index([scholar_id], map: "scholar_id")
-}
-
-model blog_comments {
-  comment_id Int         @id @default(autoincrement())
-  post_id    Int?
-  user_id    Int?
-  content    String?     @db.Text
-  created_at DateTime?   @db.Timestamp(0)
-  deleted_at DateTime?   @db.Timestamp(0)
-  blog_posts blog_posts? @relation(fields: [post_id], references: [post_id], onDelete: NoAction, onUpdate: NoAction, map: "blog_comments_ibfk_1")
-  users      users?      @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "blog_comments_ibfk_2")
-
-  @@index([post_id], map: "post_id")
-  @@index([user_id], map: "user_id")
-}
-
-model blog_posts {
-  post_id       Int                @id @default(autoincrement())
-  author_id     Int?
-  title         String?            @db.VarChar(255)
-  content       String?            @db.Text
-  status        blog_posts_status?
-  created_at    DateTime?          @db.Timestamp(0)
-  blog_comments blog_comments[]
-  users         users?             @relation(fields: [author_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "blog_posts_ibfk_1")
-
-  @@index([author_id], map: "author_id")
-}
-
 // NEW
 model comments {
   comment_id       Int               @id @default(autoincrement())
@@ -127,11 +85,12 @@ model media {
 
   uploaded_at DateTime? @db.Timestamp(0)
   view_count  Int       @default(0)
-  like_count  Int       @default(0)
+  like_count  Int       @default(0) // here sould i be rmeoved and to its newe table ?
 
-  title       String? @db.VarChar(255)
+  title       String?       @db.VarChar(255)
   year        Int?
-  description String? @db.Text
+  description String?       @db.Text
+  media_likes media_likes[]
 
   @@index([version_id], map: "version_id")
   @@index([uploaded_by], map: "uploaded_by")
@@ -317,7 +276,6 @@ model scholars {
   scholar_id     Int              @id @default(autoincrement())
   created_by     Int?
   created_at     DateTime?        @db.Timestamp(0)
-  bibliography   bibliography[]
   internal_links internal_links[]
 
   scholar_contributors scholar_contributors[]
@@ -332,13 +290,10 @@ model users {
   username              String?               @unique(map: "username") @db.VarChar(255)
   email                 String?               @unique(map: "email") @db.VarChar(255)
   password_hash         String?               @db.VarChar(255)
-  role_id               Int?                  
+  role_id               Int?
   is_banned             Boolean?              @default(false)
   created_at            DateTime?             @db.Timestamp(0)
   email_verified        Boolean               @default(false)
-  bibliography          bibliography[]
-  blog_comments         blog_comments[]
-  blog_posts            blog_posts[]
   comments              comments[]
   email_verifications   email_verifications[]
   media                 media[]
@@ -346,6 +301,12 @@ model users {
   password_resets       password_resets[]
   reports               reports[]
   allowed_to_contribute Boolean               @default(true)
+  name             String? @db.VarChar(255)
+  bio              String? @db.Text
+  profile_picture  String? @db.VarChar(500)
+  links            Json?
+  contributorBadge Boolean @default(false)
+
 
   scholar_contributors scholar_contributors[]
   scholar_versions     scholar_versions[]
@@ -354,6 +315,11 @@ model users {
   img_versions         img_versions[]
   scholar_references   scholar_references[]
   roles                roles?                 @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction, map: "users_ibfk_1")
+  forum_posts          forum_posts[]
+  forum_comments       forum_comments[]
+  forum_post_likes     forum_post_likes[]
+  forum_comment_likes  forum_comment_likes[]
+  media_likes          media_likes[]
 
   @@index([role_id], map: "role_id")
 }
@@ -437,21 +403,109 @@ model scholar_works {
   @@index([version_id])
 }
 
+model forum_categories {
+  category_id   Int       @id @default(autoincrement())
+  name          String    @db.VarChar(255)
+  description   String?   @db.Text
+  display_order Int       @default(0)
+  created_at    DateTime? @db.Timestamp(0)
+
+  forum_posts forum_posts[]
+}
+
+model forum_posts {
+  post_id     Int       @id @default(autoincrement())
+  user_id     Int?
+  category_id Int?
+  title       String    @db.VarChar(255)
+  content     String    @db.Text
+  like_count  Int       @default(0)
+  created_at  DateTime? @db.Timestamp(0)
+  updated_at  DateTime? @db.Timestamp(0)
+  deleted_at  DateTime? @db.Timestamp(0)
+
+  users users? @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  forum_categories forum_categories? @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
+
+  forum_comments   forum_comments[]
+  forum_post_likes forum_post_likes[]
+
+  @@index([user_id])
+  @@index([category_id])
+}
+
+model forum_comments {
+  comment_id        Int       @id @default(autoincrement())
+  post_id           Int
+  user_id           Int?
+  parent_comment_id Int?
+  content           String    @db.Text
+  like_count        Int       @default(0)
+  created_at        DateTime? @db.Timestamp(0)
+  updated_at        DateTime? @db.Timestamp(0)
+  deleted_at        DateTime? @db.Timestamp(0)
+
+  forum_posts         forum_posts           @relation(fields: [post_id], references: [post_id], onDelete: Cascade)
+  users               users?                @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  parent              forum_comments?       @relation("CommentReplies", fields: [parent_comment_id], references: [comment_id], onDelete: NoAction, onUpdate: NoAction)
+  replies             forum_comments[]      @relation("CommentReplies")
+  forum_comment_likes forum_comment_likes[]
+
+  @@index([post_id])
+  @@index([parent_comment_id])
+  @@index([user_id])
+}
+
+model forum_post_likes {
+  like_id    Int       @id @default(autoincrement())
+  post_id    Int
+  user_id    Int
+  created_at DateTime? @db.Timestamp(0)
+
+  forum_posts forum_posts @relation(fields: [post_id], references: [post_id], onDelete: Cascade)
+  users       users       @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([post_id, user_id])
+  @@index([post_id])
+}
+
+model forum_comment_likes {
+  like_id    Int       @id @default(autoincrement())
+  comment_id Int
+  user_id    Int
+  created_at DateTime? @db.Timestamp(0)
+
+  forum_comments forum_comments @relation(fields: [comment_id], references: [comment_id], onDelete: Cascade)
+  users          users          @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([comment_id, user_id])
+  @@index([comment_id])
+}
+
+model media_likes {
+  like_id    Int       @id @default(autoincrement())
+  media_id   Int
+  user_id    Int
+  created_at DateTime? @db.Timestamp(0)
+
+  media media @relation(fields: [media_id], references: [media_id], onDelete: Cascade)
+  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([media_id, user_id])
+  @@index([media_id])
+}
+
 enum reports_content_type {
   scholar
   comment
-  blog_post
-  blog_comment
+  forum_post
+  forum_comment
 }
 
 enum scholar_relationships_relation_type {
   teacher
   student
-}
-
-enum blog_posts_status {
-  draft
-  published
 }
 
 enum media_file_type {

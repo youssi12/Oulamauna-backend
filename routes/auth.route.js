@@ -3,7 +3,10 @@ const router = express.Router();
 const {register, login, getme, logout,verifyEmail,resendVerification,forgotPassword,resetPassword} = require('../controllers/auth.controller');
 const protect = require("../middlewares/auth.middleware");
 
-router.post('/register',register);
+// const { uploadProfilePicture } = require("../config/cloudinary");
+// router.post('/register', uploadProfilePicture.single("profile_picture"), register);
+
+router.post('/register',  register);
 router.get('/verify-email',verifyEmail);
 router.post('/resend-verification',resendVerification);
 router.post('/login',login);

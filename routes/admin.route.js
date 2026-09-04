@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 
 const { getAllUsers, getUserById, banUser, unbanUser } = require("../controllers/user.controller");
-const { approveMedia,rejectMedia,deleteMedia,getPendingMedia} = require("../controllers/mediaUpload.controller");
+const { approveMedia,rejectMedia,deleteMedia,getPendingMedia} = require("../controllers/media.controller");
 const scholarManagement = require("../controllers/scholarManagement.controller")
 const {updateRegion,deleteRegion,} = require("../controllers/region.controller");
 const {updateDiscipline,deleteDiscipline} = require("../controllers/discipline.controller");
