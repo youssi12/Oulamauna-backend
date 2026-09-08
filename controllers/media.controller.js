@@ -339,21 +339,36 @@ const deleteMedia = async (req, res) => {
 
 const getScholarMedia = async (req, res) => {
   const versionId = parseInt(req.params.version_id);
+  // ✅ Get current user ID (null if not logged in)
+  const userId = req.user ? req.user.id : null;
 
   try {
-    const media = await prisma.media.findMany({
+    const mediaItems = await prisma.media.findMany({
       where: {
         version_id: versionId,
         status: "approved",
+      },
+      include: {
+        users: { select: { id: true, username: true } },
+        // ✅ Check if current user liked this media
+        media_likes: userId ? {
+          where: { user_id: userId }
+        } : undefined
       },
       orderBy: {
         uploaded_at: "desc",
       },
     });
 
+    // ✅ Add is_liked_by_user flag for each media item
+    const mediaWithStatus = mediaItems.map(item => ({
+      ...item,
+      is_liked_by_user: item.media_likes && item.media_likes.length > 0
+    }));
+
     res.json({
       success: true,
-      data: media,
+      data: mediaWithStatus,
     });
 
   } catch (error) {

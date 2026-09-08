@@ -856,6 +856,8 @@ exports.getScholarById = async (req, res) => {
               where: { status: "approved" },
               include: {
                 users: { select: { id: true, username: true } },
+                // ✅ ALWAYS fetch the user_ids of people who liked this media
+                media_likes: { select: { user_id: true } } 
               },
             },
             internal_links: {
