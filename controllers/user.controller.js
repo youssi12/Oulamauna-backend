@@ -106,19 +106,18 @@ exports.getMyProfile = async (req,res) =>{
 
 }
 
-exports.getUserProfile = async (req,res) =>{
-  const targetUserId = parseInt(req.params.id,10);
-    if(Number.isNaN(targetUserId)){
-      return res.status(400).json({ success: false, message: "Invalid user id" });
-    }
+exports.getUserProfile = async (req, res) => {
+  const targetUserId = parseInt(req.params.id, 10);
+  if (Number.isNaN(targetUserId)) {
+    return res.status(400).json({ success: false, message: "Invalid user id" });
+  }
 
+  const requestinguserid = req.user?.id ?? null; 
 
-   const requestinguserid = req.user?.id ?? null; 
-   // i put null here in the case teh user is nt logged in and thus he still can see teh proile if lalowed 
-  try{
+  try {
     const user = await prisma.users.findUnique({
-      where:{id:targetUserId},
-        select: {
+      where: { id: targetUserId },
+      select: {
         username: true,
         name: true,
         bio: true,
@@ -126,54 +125,44 @@ exports.getUserProfile = async (req,res) =>{
         links: true,
         email: true,
         contributorBadge: true,
-        role_id: true
-       }
-       
-    })
-   
-     if(!user){
-        return res.status(404).json({
-         success: false,
+        role_id: true // ✅ We are selecting it from the database
+      }
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
         message: "User not found"
-         });
-       }
+      });
+    }
 
-     const isSelf= targetUserId === requestinguserid; // null for the unprotected  user case (cause i think u can see prophile without havng to login)
+    const isSelf = targetUserId === requestinguserid;
+    const canSeeMyProphile = true; 
+    const canSeeMyEmail = canSeeMyProphile; 
+    const AdminBadge = user.role_id == 1;
 
-
-
-     const canSeeMyProphile = true // later we get it from his settings 
-
-     if(!canSeeMyProphile ){
-      return res.status(400).json({message:"can't see his prophile "})
-     }
-     const canSeeMyEmail = canSeeMyProphile // take it from setngs late 
-
-     const AdminBadge = user.role_id == 1;
-
-     const data = {
-      username : user.username,
-      name:user.name,
-      bio:user.bio,
-      profile_picture:user.profile_picture,
-      links:user.links,
-      email:canSeeMyEmail ? user.email :null,
+    const data = {
+      username: user.username,
+      name: user.name,
+      bio: user.bio,
+      profile_picture: user.profile_picture,
+      links: user.links,
+      email: canSeeMyEmail ? user.email : null,
       contributorBadge: user.contributorBadge,
-      adminBadge:AdminBadge
+      adminBadge: AdminBadge,
+      role_id: user.role_id // ✅ THIS IS THE MISSING LINE! ADD IT HERE.
+    };
 
-     }
-     res.json({ success: true, data });
+    res.json({ success: true, data });
 
-  }catch(err){
-      console.error("getUserProphile error:", err);
-
-  res.status(500).json({
-    success: false,
-    message: "Server error"
-  });
-
+  } catch (err) {
+    console.error("getUserProfile error:", err);
+    res.status(500).json({
+      success: false,
+      message: "Server error"
+    });
   }
-}
+};
 
  
 

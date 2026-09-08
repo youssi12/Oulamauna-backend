@@ -898,7 +898,7 @@ exports.getScholarById = async (req, res) => {
           } // <-- This closes scholar_versions include
         }, // <-- This closes scholar_versions
 
-        bibliography: true,
+       
 
         scholar_contributors: {
           include: {
