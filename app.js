@@ -32,6 +32,8 @@ app.use("/api/date",require("./routes/dates.route"))
 app.use("/api/languages", require("./routes/language.route"));
 app.use("/api/users",require("./routes/user.route"))
 app.use("/api/notification",require("./routes/notification.route"))
+app.use("/api/forum",require("./routes/forum.route"));
+
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {

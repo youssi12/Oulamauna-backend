@@ -17,3 +17,5 @@ docs/
 
 # Local/database backups
 *.sql
+
+./todo.text
