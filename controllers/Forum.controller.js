@@ -192,7 +192,7 @@ exports.createComment = async (req, res) => {
   }
 };
 
-// ── Delete a comment (soft delete — owner or admin) ──
+// ─ Delete a comment (soft delete — owner or admin) ──
 // Soft delete only: a hard delete would orphan any replies nested
 // under it. The frontend should render deleted comments as
 // "[deleted]" while still showing their replies underneath.
