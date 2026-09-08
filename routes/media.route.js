@@ -20,7 +20,7 @@ const {
 
 const protect = require("../middlewares/auth.middleware");
 
-router.post("/media/:id/view", registerMediaView);     
+router.post("/view/:id", registerMediaView);     
 
 router.use(protect);
 
@@ -30,7 +30,8 @@ router.post( "/",uploadMediaMiddleware.single("file"), uploadMedia);
 router.put("/:media_id",updateMedia);
 // Get approved media for a scholar
 router.get("/:version_id", getScholarMedia);
-router.post("/media/:id/like",  toggleMediaLike);    
+router.post("/like/:id",  toggleMediaLike);   
+ 
       
 
  

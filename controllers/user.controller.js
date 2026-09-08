@@ -101,7 +101,8 @@ exports.getMyProfile = async (req,res) =>{
 
 
   } catch (error) {
-    res.status(500).json({error:error})
+    res.status(500).json({ success: false, message: "Server error" });
+    console.log("err: ",error)
   }
 
 }
@@ -168,22 +169,41 @@ exports.getUserProfile = async (req, res) => {
 
 exports.updateMyProfile = async (req, res) => {
   const userId = req.user.id;
-  const { name, bio, links } = req.body;
+  const { name, bio } = req.body; // links removed from here
+  let { links } = req.body;       // declared once, using let so it can be reassigned
+
+  if (links !== undefined) {
+    try {
+      links = typeof links === "string" ? JSON.parse(links) : links;
+    } catch {
+      return res.status(400).json({ success: false, message: "Links must be valid JSON" });
+    }
+    if (typeof links !== "object" || links === null || Array.isArray(links)) {
+      return res.status(400).json({ success: false, message: "Links must be a valid object" });
+    }
+  }
 
   try {
     if (req.file) {
       await uploadProfilePictureService({ userId, file: req.file });
     }
 
-    // TODO: your existing PATCH-style "only update what was sent" logic
-    // for name/bio/links, same as we discussed for editScholar's pattern
-
     const updated = await prisma.users.update({
       where: { id: userId },
       data: {
-        name: name !== undefined ? name : undefined, // TODO: confirm Prisma's undefined-skip behavior here, test it
+        name: name !== undefined ? name : undefined,
         bio: bio !== undefined ? bio : undefined,
         links: links !== undefined ? links : undefined,
+      },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        name: true,
+        bio: true,
+        links: true,
+        profile_picture: true,
+        contributorBadge: true,
       },
     });
 
@@ -193,5 +213,4 @@ exports.updateMyProfile = async (req, res) => {
     res.status(500).json({ success: false, message: error.message || "Server error" });
   }
 };
-
 

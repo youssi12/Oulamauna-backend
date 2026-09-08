@@ -13,7 +13,7 @@ const {uploadProfilePictureService} = require("../service/profilePicture.service
 
 const { uploadProfilePicture } = require("../config/cloudinary");  
 
-console.log("protect",protect)
+ 
 
 router.get("/profile/me",protect,getMyProfile);
 router.get("/profile/:id",optProtect,getUserProfile);

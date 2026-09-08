@@ -63,6 +63,7 @@ model languages {
   scholar_versions scholar_versions[]
   disciplines      disciplines[]
   regions          regions[]
+  users_preferred users[]
 }
 
 model media {
@@ -306,6 +307,18 @@ model users {
   profile_picture  String? @db.VarChar(500)
   links            Json?
   contributorBadge Boolean @default(false)
+  preferred_language_id Int? @default(1)
+  notifications_enabled Boolean @default(true)
+  profile_visibility   profile_visibility_type? @default(public)    
+  show_email            Boolean @default(false)
+  show_contributions    Boolean @default(true)
+  is_active             Boolean @default(true)
+  deactivated_at        DateTime? @db.Timestamp(0)
+
+  languages_preferred languages? @relation(fields: [preferred_language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction)
+
+
+
 
 
   scholar_contributors scholar_contributors[]
@@ -558,4 +571,11 @@ enum work_format {
   SOFTWARE
   MAP
   OTHER
+}
+
+
+enum profile_visibility_type{
+   public
+  registered_only
+  private
 }
