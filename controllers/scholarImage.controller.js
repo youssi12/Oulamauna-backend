@@ -129,6 +129,7 @@ const prisma = require("../config/db");
       };
     });
 
+    // ⭐
     // Notify the actual uploader
     await prisma.notifications.create({
       data: {
@@ -199,6 +200,7 @@ const prisma = require("../config/db");
       },
     });
 
+    // ⭐
     await prisma.notifications.create({
       data: {
         user_id: imageVersion.uploaded_by,

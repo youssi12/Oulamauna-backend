@@ -290,6 +290,7 @@ exports.approveReference = async (req, res) => {
     // Notify contributor
     // -----------------------------------------
 
+    // ⭐
     if (reference.created_by) {
       await prisma.notifications.create({
         data: {
@@ -358,6 +359,7 @@ exports.approveReference = async (req, res) => {
       },
     });
 
+    // ⭐
     // Notify contributor
     if (reference.created_by) {
       await prisma.notifications.create({

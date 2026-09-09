@@ -402,6 +402,7 @@ exports.approveScholar = async (req, res) => {
         },
       });
     });
+    //⭐
     // 2. Notify user
     if (version.created_by) {
       await prisma.notifications.create({
@@ -544,7 +545,7 @@ exports.rejectScholar = async (req, res) => {
         // ======================================================
         // 3. Notify contributor
         // ======================================================
-
+// ⭐
         if (version.created_by) {
             await prisma.notifications.create({
                 data: {

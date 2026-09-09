@@ -127,7 +127,7 @@ exports.createWork = async (req, res) => {
     // -----------------------------------------
     // Notification & Auto-Promotion
     // -----------------------------------------
-
+//⭐
     if (work.created_by) {
       await prisma.notifications.create({
         data: {
@@ -208,7 +208,7 @@ exports.rejectWork = async (req, res) => {
     // -----------------------------------------
     // Notification
     // -----------------------------------------
-
+//⭐
     if (work.created_by) {
       await prisma.notifications.create({
         data: {

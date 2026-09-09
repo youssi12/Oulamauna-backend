@@ -72,6 +72,9 @@ const DEFAULT_LANGUAGE_ID = 1; // 'ar' — Arabic
         },
       });
 
+
+      
+      // ⭐ kima hadi matestha9sh front cause all teh info are from the backend side
       if (admins.length > 0) {
         await tx.notifications.createMany({
           data: admins.map((admin) => ({
