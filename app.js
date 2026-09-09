@@ -33,6 +33,7 @@ app.use("/api/languages", require("./routes/language.route"));
 app.use("/api/users",require("./routes/user.route"))
 app.use("/api/notification",require("./routes/notification.route"))
 app.use("/api/forum",require("./routes/forum.route"));
+app.use("/api/settings",require("./routes/setting.route"))
 
 //ERROR MIDDLEWARES 
 
