@@ -4,6 +4,45 @@ const prisma = require("../config/db");
 // POSTS
 // ============================================================
 
+// ── Create a category ──
+// Per spec: registered users publish categories immediately, no moderation gate.
+ 
+exports.createCategory = async (req, res) => {
+  const { name, description } = req.body;
+
+  if (!name) {
+    return res.status(400).json({ success: false, message: "name is required" });
+  }
+
+  try {
+    const category = await prisma.forum_categories.create({
+      data: {
+        name,
+        description: description || null,
+        created_at: new Date(),
+      },
+    });
+
+    res.status(201).json({ success: true, data: category });
+  } catch (error) {
+    console.error("createCategory error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+exports.getAllCategories = async (req, res) => {
+  try {
+    const categories = await prisma.forum_categories.findMany({
+      orderBy: { display_order: "asc" },
+    });
+
+    res.json({ success: true, data: categories });
+  } catch (error) {
+    console.error("getAllCategories error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
 // ── Create a post ──
 // Per spec: registered users publish immediately, no moderation gate.
 exports.createPost = async (req, res) => {

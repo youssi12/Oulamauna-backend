@@ -234,6 +234,7 @@ exports.createScholar = async (req, res) => {
     }
  
     const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+    //⭐
     if (admins.length > 0) {
       await prisma.notifications.createMany({
         data: admins.map((admin) => ({
@@ -797,7 +798,7 @@ exports.submitDraft = async (req, res) => {
       where: { roles: { role_name: "admin" } },
       select: { id: true },
     });
-
+//⭐
     if (admins.length > 0) {
       await prisma.notifications.createMany({
         data: admins.map((admin) => ({
@@ -1186,6 +1187,7 @@ exports.editScholar = async (req, res) => {
     }
 
     const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+    //⭐
     if (admins.length > 0) {
       await prisma.notifications.createMany({
         data: admins.map((admin) => ({
@@ -1639,6 +1641,7 @@ exports.updateRejectedVersion = async (req, res) => {
     // 4. Notify admins ONLY if resubmitting to pending
     if (targetStatus === "pending") {
       const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+      //⭐
       if (admins.length > 0) {
         await prisma.notifications.createMany({
           data: admins.map((admin) => ({

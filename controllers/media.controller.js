@@ -138,6 +138,7 @@ const approveMedia = async (req, res) => {
         media.file_name ||
         "media";
 
+        // ⭐
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,
@@ -230,6 +231,7 @@ const rejectMedia = async (req, res) => {
         media.file_name ||
         "media";
 
+        //⭐ hna testha9 front 3la khater we need reason 
       await prisma.notifications.create({
         data: {
           user_id: media.uploaded_by,

@@ -74,6 +74,7 @@ exports.createRegion = async (req, res) => {
         },
       });
 
+      // ⭐
       if (admins.length > 0) {
         await tx.notifications.createMany({
           data: admins.map((admin) => ({

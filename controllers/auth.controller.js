@@ -156,6 +156,14 @@ exports.login = async (req, res) => {
         email: user.email,
       });
 
+        if (!user.is_active) {
+      await prisma.users.update({
+        where: { id: user.id },
+        data: { is_active: true, deactivated_at: null },
+      });
+      user.is_active = true; // keep the in-memory object consistent for serializeUser below
+    }
+
     const token = jwt.sign(
       { id: user.id, email: user.email, role_id: user.role_id },
       process.env.JWT_SECRET,

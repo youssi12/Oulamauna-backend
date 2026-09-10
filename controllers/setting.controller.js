@@ -8,17 +8,24 @@ const getMySettings = async (req, res) => {
 
   try {
     const mysettings = await prisma.users.findUnique({
-      where: { id: userId },
+  where: { id: userId },
+  select: {
+    preferred_language_id: true,
+    notifications_enabled: true,
+    profile_visibility: true,
+    show_email: true,
+    show_contributions: true,
+    is_active: true,
+    languages_preferred: {
       select: {
-        preferred_language_id: true,
-        notifications_enabled: true,
-        profile_visibility: true,
-        show_email: true,
-        show_contributions: true,
-        is_active: true,
-        // no password_hash, no other sensitive fields
+        language_id: true,
+        code: true,
+        name: true,
       },
-    });
+    },
+    // no password_hash, no other sensitive fields
+  },
+});
 
     if (!mysettings) {
       return res.status(404).json({ success: false, message: "User not found" });
