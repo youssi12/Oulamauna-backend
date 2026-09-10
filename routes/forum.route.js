@@ -12,10 +12,11 @@ const {
   toggleCommentLike,
   reportPost,
   reportComment,
+   getCategories,
 } = require("../controllers/Forum.controller");
 
 const protect = require("../middlewares/auth.middleware");
-
+router.get("/categories", getCategories);
 router.use(protect);
 
 // Posts
