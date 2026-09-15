@@ -124,21 +124,29 @@ exports.createWork = async (req, res) => {
       });
     });
 
+        // ✅ PASTE THIS EXACT BLOCK:
     // -----------------------------------------
-    // Notification & Auto-Promotion
+    // Notification & Auto-Promotion (ONLY if notifications enabled)
     // -----------------------------------------
 //⭐
     if (work.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: work.created_by,
-          type: "WORK_APPROVED",
-          message: `Your work "${work.title}" has been approved.`,
-          related_entity: `work:${workId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
+      const targetUser = await prisma.users.findUnique({
+        where: { id: work.created_by },
+        select: { notifications_enabled: true }
       });
+
+      if (targetUser && targetUser.notifications_enabled === true) {
+        await prisma.notifications.create({
+          data: {
+            user_id: work.created_by,
+            type: "WORK_APPROVED",
+            message: `Your work "${work.title}" has been approved.`,
+            related_entity: `work:${workId}`,
+            is_read: false,
+            created_at: new Date(),
+          },
+        });
+      }
 
       // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
       // This checks if they are a basic "user" and upgrades them automatically!
@@ -205,26 +213,32 @@ exports.rejectWork = async (req, res) => {
       },
     });
 
-    // -----------------------------------------
-    // Notification
-    // -----------------------------------------
+           // ✅ PASTE THIS EXACT BLOCK:
+        // -----------------------------------------
+        // Notification (ONLY if notifications enabled)
+        // -----------------------------------------
 //⭐
-    if (work.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: work.created_by,
-          type: "WORK_REJECTED",
-          message:
-            `Your work "${work.title}" was rejected.` +
-            (reason
-              ? ` Reason: ${reason}`
-              : ""),
-          related_entity: `work:${workId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
-      });
-    }
+        if (work.created_by) {
+            const targetUser = await prisma.users.findUnique({
+                where: { id: work.created_by },
+                select: { notifications_enabled: true }
+            });
+
+            if (targetUser && targetUser.notifications_enabled === true) {
+                await prisma.notifications.create({
+                    data: {
+                        user_id: work.created_by,
+                        type: "WORK_REJECTED",
+                        message:
+                            `Your work "${work.title}" was rejected.` +
+                            (reason ? ` Reason: ${reason}` : ""),
+                        related_entity: `work:${workId}`,
+                        is_read: false,
+                        created_at: new Date(),
+                    },
+                });
+            }
+        }
 
     return res.json({
       success: true,

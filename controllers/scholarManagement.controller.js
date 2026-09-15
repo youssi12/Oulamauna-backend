@@ -79,64 +79,105 @@ exports.getDashboardStats = async (req, res) => {
       overdue,
       newToday,
       thisWeek,
-      // ✅ ADD THIS: Fetch reviewed scholars to calculate average time
-      reviewedScholars
+      reviewedScholars,
+      // ✅ Get ALL pending versions grouped by language (not just creation)
+      languageRaw,
+      // ✅ Get oldest pending versions (all types)
+      urgentRaw
     ] = await Promise.all([
-      // Total pending (creation only)
       prisma.scholar_versions.count({
-        where: { status: "pending", version_type: "creation" }
+        where: { status: "pending" } // ✅ Removed version_type filter
       }),
 
-      // Overdue: pending for more than 3 days
       prisma.scholar_versions.count({
         where: {
           status: "pending",
-          version_type: "creation",
-          created_at: { lt: threeDaysAgo }
+          created_at: { lt: threeDaysAgo } // ✅ Removed version_type filter
         }
       }),
 
-      // New today
       prisma.scholar_versions.count({
         where: {
           status: "pending",
-          version_type: "creation",
-          created_at: { gte: startOfToday }
+          created_at: { gte: startOfToday } // ✅ Removed version_type filter
         }
       }),
 
-      // This week: approved/rejected this week
       prisma.scholar_versions.count({
         where: {
           status: { in: ["approved", "rejected"] },
-          version_type: "creation",
-          created_at: { gte: startOfWeek }
+          created_at: { gte: startOfWeek } // ✅ Removed version_type filter
         }
       }),
 
-      // ✅ Fetch recently reviewed scholars to calculate avg time
       prisma.scholar_versions.findMany({
         where: {
           status: { in: ["approved", "rejected"] },
-          version_type: "creation",
-          created_at: { gte: startOfWeek }
+          created_at: { gte: startOfWeek } // ✅ Removed version_type filter
         },
         select: { created_at: true }
+      }),
+
+      // ✅ Group ALL pending versions by language_id
+      prisma.scholar_versions.groupBy({
+        by: ["language_id"],
+        where: { 
+          status: "pending", // ✅ Only pending
+          language_id: { not: null } 
+        },
+        _count: { _all: true }
+      }),
+
+      // ✅ Get oldest pending versions (all types)
+      prisma.scholar_versions.findMany({
+        where: { status: "pending" }, // ✅ All pending, not just creation
+        orderBy: { created_at: "asc" },
+        take: 5,
+        select: { 
+          version_id: true, 
+          canonical_name: true, 
+          created_at: true,
+          users: { select: { username: true } } // ✅ Include submitter info
+        }
       })
     ]);
 
-    // ✅ Calculate average review time dynamically
     let avgReviewTime = "0h 0m";
     if (reviewedScholars.length > 0) {
       const totalHours = reviewedScholars.reduce((sum, scholar) => {
         const createdAt = new Date(scholar.created_at);
         return sum + (now - createdAt) / (1000 * 60 * 60);
       }, 0);
-      
+
       const avgHours = Math.floor(totalHours / reviewedScholars.length);
       const avgMinutes = Math.round(((totalHours / reviewedScholars.length) % 1) * 60);
       avgReviewTime = `${avgHours}h ${avgMinutes}m`;
     }
+
+    // Resolve language codes/names from IDs
+    const languageIds = languageRaw.map(l => l.language_id).filter(Boolean);
+    const languagesMeta = languageIds.length
+      ? await prisma.languages.findMany({ 
+          where: { language_id: { in: languageIds } },
+          select: { language_id: true, code: true, name: true }
+        })
+      : [];
+
+    const languageBreakdown = languageRaw.map(l => {
+      const meta = languagesMeta.find(m => m.language_id === l.language_id);
+      return {
+        language: meta?.code || meta?.name || "unknown",
+        count: l._count._all
+      };
+    });
+
+    // Format urgent reviews with days waiting
+    const urgentReviews = urgentRaw.map(v => ({
+      id: v.version_id,
+      name: v.canonical_name || `Submission #${v.version_id}`,
+      daysWaiting: Math.floor((now - new Date(v.created_at)) / (1000 * 60 * 60 * 24)),
+      submittedBy: v.users?.username || "Unknown"
+    }));
 
     res.json({
       success: true,
@@ -145,12 +186,184 @@ exports.getDashboardStats = async (req, res) => {
         overdue,
         new_today: newToday,
         this_week: thisWeek,
-        avg_review_time: avgReviewTime, // ✅ Send real data to frontend
+        avg_review_time: avgReviewTime,
+        language_breakdown: languageBreakdown,
+        urgent_reviews: urgentReviews
       }
     });
 
   } catch (error) {
     console.error("getDashboardStats error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+exports.getDashboardData = async (req, res) => {
+  try {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(now.getDate() - 30);
+
+    // 1. Fetch all basic counts in parallel
+    const [
+      totalUsers, activeContributors, bannedUsers,
+      totalScholars, pendingScholars, pendingEdits, pendingMedia, pendingWorks,
+      openReports, totalComments, totalForumPosts, totalReferences, totalDisciplines
+    ] = await Promise.all([
+      prisma.users.count(),
+      prisma.users.count({ where: { allowed_to_contribute: true } }),
+      prisma.users.count({ where: { is_banned: true } }),
+      prisma.scholars.count(),
+      prisma.scholar_versions.count({ where: { status: "pending", version_type: "creation" } }),
+      prisma.scholar_versions.count({ where: { status: "pending", version_type: "edition" } }),
+      prisma.media.count({ where: { status: "pending" } }),
+      prisma.scholar_works.count({ where: { status: "pending" } }),
+      prisma.reports.count({ where: { status: "pending" } }),
+      prisma.comments.count(),
+      prisma.forum_posts.count({ where: { deleted_at: null } }),
+      prisma.scholar_references.count({ where: { status: "approved" } }),
+      prisma.disciplines.count()
+    ]);
+
+    const totalPending = pendingScholars + pendingEdits + pendingMedia + pendingWorks;
+
+    // 2. Fetch Daily Contributions (Last 30 Days)
+    const recentApproved = await prisma.scholar_versions.findMany({
+      where: { status: "approved", created_at: { gte: thirtyDaysAgo } },
+      select: { created_at: true }
+    });
+    const dailyData = {};
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(); d.setDate(d.getDate() - i);
+      const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      dailyData[dateStr] = 0;
+    }
+    recentApproved.forEach(item => {
+      const dateStr = item.created_at.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      if (dailyData[dateStr] !== undefined) dailyData[dateStr]++;
+    });
+    const formattedDailyData = Object.keys(dailyData).map(date => ({ date, contributions: dailyData[date] }));
+
+    // 3. Fetch Language Distribution
+    const langDistribution = await prisma.scholar_versions.groupBy({
+      by: ['language_id'],
+      where: { status: "approved", language_id: { not: null } },
+      _count: { language_id: true }
+    });
+    const langMap = { 1: 'English', 2: 'Arabic', 3: 'French', 4: 'Other' };
+    const formattedLangData = langDistribution.map(l => ({
+      name: langMap[l.language_id] || 'Unknown',
+      value: l._count.language_id
+    }));
+
+    // 4. Fetch Urgent Pending Items
+    const urgentReviews = await prisma.scholar_versions.findMany({
+      where: { status: "pending" },
+      select: { 
+        version_id: true, canonical_name: true, created_at: true, version_type: true,
+        users: { select: { username: true } }
+      },
+      orderBy: { created_at: 'asc' },
+      take: 3
+    });
+
+    // 5. Fetch Recent Activity Feed
+    const [recentScholars, recentUsers, recentMedia] = await Promise.all([
+      prisma.scholar_versions.findMany({ where: { status: "approved" }, select: { canonical_name: true, created_at: true, users: { select: { username: true } } }, orderBy: { created_at: "desc" }, take: 3 }),
+      prisma.users.findMany({ select: { username: true, created_at: true }, orderBy: { created_at: "desc" }, take: 3 }),
+      prisma.media.findMany({ where: { status: "approved" }, select: { title: true, uploaded_at: true, users: { select: { username: true } } }, orderBy: { uploaded_at: "desc" }, take: 3 })
+    ]);
+    const activityFeed = [
+      ...recentScholars.map(s => ({ type: 'scholar', text: `New Scholar: ${s.canonical_name}`, user: s.users?.username, date: s.created_at })),
+      ...recentUsers.map(u => ({ type: 'user', text: `New User: ${u.username}`, user: u.username, date: u.created_at })),
+      ...recentMedia.map(m => ({ type: 'media', text: `New Media: ${m.title}`, user: m.users?.username, date: m.uploaded_at }))
+    ].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 8);
+
+    // 6. Fetch Top Contributors
+    const topContributorsData = await prisma.scholar_versions.groupBy({
+      by: ['created_by'], where: { status: "approved", created_by: { not: null } },
+      _count: { created_by: true }, orderBy: { _count: { created_by: 'desc' } }, take: 5
+    });
+    const topUserIds = topContributorsData.map(t => t.created_by).filter(id => id !== null);
+    const usersList = await prisma.users.findMany({ where: { id: { in: topUserIds } }, select: { id: true, username: true } });
+    const finalTopContributors = topContributorsData.map(tc => {
+      const user = usersList.find(u => u.id === tc.created_by);
+      return { name: user ? user.username : "Unknown User", count: tc._count.created_by };
+    });
+
+    // ==========================================
+    // NEW CHARTS DATA
+    // ==========================================
+
+    // 1. Approval vs Rejection Rate
+    const [approvedCount, rejectedCount] = await Promise.all([
+      prisma.scholar_versions.count({ where: { status: "approved" } }),
+      prisma.scholar_versions.count({ where: { status: "rejected" } })
+    ]);
+    const approvalVsRejection = [
+      { name: "Approved", value: approvedCount },
+      { name: "Rejected", value: rejectedCount }
+    ].filter(item => item.value > 0);
+
+    // 2. Pending Items Age Distribution
+    const pendingVersions = await prisma.scholar_versions.findMany({
+      where: { status: "pending" },
+      select: { created_at: true }
+    });
+    const ageBuckets = { "0-3 days": 0, "4-7 days": 0, "8-14 days": 0, "15+ days": 0 };
+    pendingVersions.forEach(v => {
+      const days = Math.floor((now - new Date(v.created_at)) / (1000 * 60 * 60 * 24));
+      if (days <= 3) ageBuckets["0-3 days"]++;
+      else if (days <= 7) ageBuckets["4-7 days"]++;
+      else if (days <= 14) ageBuckets["8-14 days"]++;
+      else ageBuckets["15+ days"]++;
+    });
+    const pendingAgeData = Object.keys(ageBuckets).map(key => ({ name: key, value: ageBuckets[key] }));
+
+    // 3. Top Disciplines (from approved scholars)
+    const approvedVersionIds = await prisma.scholar_versions.findMany({
+      where: { status: "approved" },
+      select: { version_id: true }
+    });
+    const ids = approvedVersionIds.map(v => v.version_id);
+    const disciplineLinks = ids.length > 0 ? await prisma.scholar_disciplines.findMany({
+      where: { version_id: { in: ids } },
+      include: { disciplines: true }
+    }) : [];
+    
+    const discCounts = {};
+    disciplineLinks.forEach(link => {
+      const name = link.disciplines?.name || "Uncategorized";
+      discCounts[name] = (discCounts[name] || 0) + 1;
+    });
+    const topDisciplines = Object.entries(discCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 5)
+      .map(([name, count]) => ({ name, count }));
+
+    // ==========================================
+    // SEND RESPONSE
+    // ==========================================
+    res.json({
+      success: true,
+      data: {
+        summary: { totalUsers, activeContributors, totalScholars, totalPending, openReports, totalComments, totalForumPosts, totalReferences, totalDisciplines },
+        queueBreakdown: { scholars: pendingScholars, edits: pendingEdits, media: pendingMedia, works: pendingWorks },
+        dailyContributions: formattedDailyData,
+        languageDistribution: formattedLangData,
+        urgentReviews: urgentReviews.map(u => ({ 
+          id: u.version_id, name: u.canonical_name, type: u.version_type, 
+          user: u.users?.username, daysWaiting: Math.floor((now - new Date(u.created_at)) / (1000 * 60 * 60 * 24)) 
+        })),
+        activityFeed,
+        topContributors: finalTopContributors,
+        approvalVsRejection,
+        pendingAgeData,
+        topDisciplines
+      }
+    });
+
+  } catch (error) {
+    console.error("getDashboardData error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
@@ -242,7 +455,7 @@ exports.getPendingEditedScholars = async (req, res) => {
 
 exports.approveScholar = async (req, res) => {
   const versionId = parseInt(req.params.id);
-
+const { reason } = req.body || {};
   try {
     const version = await prisma.scholar_versions.findUnique({
       where: { version_id: versionId },
@@ -402,19 +615,25 @@ exports.approveScholar = async (req, res) => {
         },
       });
     });
-    //⭐
-    // 2. Notify user
+    //⭐ 2. Notify user ONLY if they have notifications enabled
     if (version.created_by) {
-      await prisma.notifications.create({
-        data: {
-          user_id: version.created_by,
-          type: "SCHOLAR_APPROVED",
-          message: `Your scholar submission "${version.canonical_name}" has been approved.`,
-          related_entity: `scholar_version:${versionId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
+      const targetUser = await prisma.users.findUnique({
+        where: { id: version.created_by },
+        select: { notifications_enabled: true }
       });
+
+      if (targetUser && targetUser.notifications_enabled === true) {
+        await prisma.notifications.create({
+          data: {
+            user_id: version.created_by,
+            type: "SCHOLAR_APPROVED",
+            message: `Your scholar submission "${version.canonical_name}" has been approved.${reason ? ' Note: ' + reason : ''}`,
+            related_entity: `scholar_version:${versionId}`,
+            is_read: false,
+            created_at: new Date(),
+          },
+        });
+      }
     }
 
     // 3. ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
@@ -725,6 +944,90 @@ exports.banUser = async (req, res) => {
     });
   } catch (error) {
     console.error("banUser error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// Lightweight list for the "All Scholars" admin page — just enough to
+// build the languages/canonical-name row per scholar. No works/media/refs.
+exports.getAllScholarsSummary = async (req, res) => {
+  try {
+    const scholars = await prisma.scholars.findMany({
+      select: {
+        scholar_id: true,
+        created_at: true,
+        users: { select: { username: true } },
+        scholar_versions: {
+          where: { status: "approved" },
+          select: {
+            version_id: true,
+            canonical_name: true,
+            image_url: true,
+            languages: { select: { code: true } },
+          },
+          orderBy: { created_at: "desc" },
+        },
+      },
+      orderBy: { scholar_id: "asc" },
+    });
+
+    res.json({ success: true, data: scholars });
+  } catch (error) {
+    console.error("getAllScholarsSummary error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// Full detail for ONE scholar's ONE approved language version — fetched
+// on demand when the admin clicks a language chip on the summary card.
+exports.getScholarVersionDetail = async (req, res) => {
+  const scholarId = parseInt(req.params.id, 10);
+  const { lang } = req.query;
+
+  if (Number.isNaN(scholarId)) {
+    return res.status(400).json({ success: false, message: "Invalid scholar id" });
+  }
+  if (!lang) {
+    return res.status(400).json({ success: false, message: "lang query param is required" });
+  }
+
+  try {
+    const language = await prisma.languages.findFirst({ where: { code: lang } });
+    if (!language) {
+      return res.status(404).json({ success: false, message: `Language '${lang}' not found` });
+    }
+
+    const version = await prisma.scholar_versions.findFirst({
+      where: {
+        scholar_id: scholarId,
+        language_id: language.language_id,
+        status: "approved",
+      },
+      include: {
+        users: { select: { id: true, username: true } },
+        languages: true,
+        regions: true,
+        scholar_aliases: true,
+        scholar_dates: true,
+        scholar_disciplines: { include: { disciplines: true } },
+        scholar_works: { where: { status: "approved" } },
+        media: { where: { status: "approved" } },
+        scholar_references: { where: { status: "approved" } },
+        scholar_relationships_as_source: {
+          include: {
+            related_scholar_version: { select: { canonical_name: true, scholar_id: true } },
+          },
+        },
+      },
+    });
+
+    if (!version) {
+      return res.status(404).json({ success: false, message: "Approved version not found for that language" });
+    }
+
+    res.json({ success: true, data: version });
+  } catch (error) {
+    console.error("getScholarVersionDetail error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }
 };

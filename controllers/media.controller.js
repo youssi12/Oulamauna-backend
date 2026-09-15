@@ -138,17 +138,25 @@ const approveMedia = async (req, res) => {
         media.file_name ||
         "media";
 
-        // ⭐
-      await prisma.notifications.create({
-        data: {
-          user_id: media.uploaded_by,
-          type: "MEDIA_APPROVED",
-          message: `Your media "${mediaName}" has been approved.`,
-          related_entity: `media:${mediaId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
-      });
+            // ✅ PASTE THIS EXACT BLOCK:
+        // ⭐ Check if user has notifications enabled before sending
+        const targetUser = await prisma.users.findUnique({
+          where: { id: media.uploaded_by },
+          select: { notifications_enabled: true }
+        });
+
+        if (targetUser && targetUser.notifications_enabled === true) {
+          await prisma.notifications.create({
+            data: {
+              user_id: media.uploaded_by,
+              type: "MEDIA_APPROVED",
+              message: `Your media "${mediaName}" has been approved.`,
+              related_entity: `media:${mediaId}`,
+              is_read: false,
+              created_at: new Date(),
+            },
+          });
+        }
 
       // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
       // This checks if they are a basic "user" and upgrades them automatically!
@@ -231,21 +239,27 @@ const rejectMedia = async (req, res) => {
         media.file_name ||
         "media";
 
-        //⭐ hna testha9 front 3la khater we need reason 
-      await prisma.notifications.create({
-        data: {
-          user_id: media.uploaded_by,
-          type: "MEDIA_REJECTED",
-          message:
-            `Your media "${mediaName}" was rejected.` +
-            (reason
-              ? ` Reason: ${reason}`
-              : ""),
-          related_entity: `media:${mediaId}`,
-          is_read: false,
-          created_at: new Date(),
-        },
-      });
+              // ✅ PASTE THIS EXACT BLOCK:
+        //⭐ hna testha9 front 3la khater we need reason (ONLY if notifications enabled)
+        const targetUser = await prisma.users.findUnique({
+          where: { id: media.uploaded_by },
+          select: { notifications_enabled: true }
+        });
+
+        if (targetUser && targetUser.notifications_enabled === true) {
+          await prisma.notifications.create({
+            data: {
+              user_id: media.uploaded_by,
+              type: "MEDIA_REJECTED",
+              message:
+                `Your media "${mediaName}" was rejected.` +
+                (reason ? ` Reason: ${reason}` : ""),
+              related_entity: `media:${mediaId}`,
+              is_read: false,
+              created_at: new Date(),
+            },
+          });
+        }
     }
 
     return res.json({

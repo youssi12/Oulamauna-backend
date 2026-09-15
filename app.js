@@ -34,7 +34,8 @@ app.use("/api/users",require("./routes/user.route"))
 app.use("/api/notification",require("./routes/notification.route"))
 app.use("/api/forum",require("./routes/forum.route"));
 app.use("/api/settings",require("./routes/setting.route"))
-
+app.use("/api/home", require("./routes/home.route"));
+app.use("/api/search", require("./routes/search.route"));
 //ERROR MIDDLEWARES 
 
 app.use((err, req, res, next) => {

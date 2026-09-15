@@ -3,8 +3,7 @@
   "version": "1.0.0",
   "main": "app.js",
   "scripts": {
-  
-    "start":"node app.js",
+    "start": "node app.js",
     "dev": "nodemon app.js"
   },
   "keywords": [],
@@ -25,10 +24,10 @@
     "multer-storage-cloudinary": "^4.0.0",
     "mysql2": "^3.17.4",
     "nodemailer": "^8.0.4",
-    "prisma": "^5.22.0"
+    "prisma": "^5.22.0",
+    "recharts": "^3.10.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
   }
 }
- 

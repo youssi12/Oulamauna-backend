@@ -27,39 +27,64 @@ const cookieOptions = {
 
 exports.register = async (req, res) => {
   const { username, email, password } = req.body;
-  if (!username || !email || !password)
-    return res.status(400).json({ message: "All fields are required" });
+
+  if (!username || !email || !password) {
+    return res.status(400).json({
+      message: "All fields are required"
+    });
+  }
 
   try {
-    const existing = await prisma.users.findUnique({ where: { email } });
-    if (existing)
-      return res.status(409).json({ message: "Email already in use" });
+    // Check if username already exists
+    const existingUsername = await prisma.users.findUnique({
+      where: { username }
+    });
+
+    if (existingUsername) {
+      return res.status(409).json({
+        field: "username",
+        message: "Username already in use"
+      });
+    }
+
+    // Check if email already exists
+    const existingEmail = await prisma.users.findUnique({
+      where: { email }
+    });
+
+    if (existingEmail) {
+      return res.status(409).json({
+        field: "email",
+        message: "Email already in use"
+      });
+    }
 
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
 
-    
     const userRole = await prisma.roles.findFirst({
       where: { role_name: "user" }
     });
 
     if (!userRole) {
-      console.error(" ERROR: 'user' role not found in database!");
-      return res.status(500).json({ message: "System configuration error" });
+      console.error("ERROR: 'user' role not found in database!");
+
+      return res.status(500).json({
+        message: "System configuration error"
+      });
     }
 
-  
     const user = await prisma.users.create({
-      data: { 
-        username, 
-        email, 
-        password_hash: hashedPassword, 
+      data: {
+        username,
+        email,
+        password_hash: hashedPassword,
         created_at: new Date(),
-        role_id: userRole.role_id,        
-        allowed_to_contribute: true,       
-        is_banned: false,                 
-        email_verified: false ,
-        contributorBadge:false             
+        role_id: userRole.role_id,
+        allowed_to_contribute: true,
+        is_banned: false,
+        email_verified: false,
+        contributorBadge: false
       }
     });
 
@@ -67,14 +92,56 @@ exports.register = async (req, res) => {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     await prisma.email_verifications.create({
-      data: { user_id: user.id, token, expires_at: expiresAt }
+      data: {
+        user_id: user.id,
+        token,
+        expires_at: expiresAt
+      }
     });
 
     await sendVerificationEmail(email, token);
-    res.status(201).json({ message: "User created successfully" });
+
+    return res.status(201).json({
+      message: "User created successfully"
+    });
+
   } catch (error) {
-    console.error(" Registration Error:", error);
-    res.status(500).json({ message: "Server error", error: error.message });
+    console.error("Registration Error:", error);
+
+    // Prisma unique constraint error
+    if (error?.code === "P2002") {
+      const target = error?.meta?.target;
+
+      // Duplicate username
+      if (
+        target === "username" ||
+        (Array.isArray(target) && target.includes("username"))
+      ) {
+        return res.status(409).json({
+          field: "username",
+          message: "Username already in use"
+        });
+      }
+
+      // Duplicate email
+      if (
+        target === "email" ||
+        (Array.isArray(target) && target.includes("email"))
+      ) {
+        return res.status(409).json({
+          field: "email",
+          message: "Email already in use"
+        });
+      }
+
+      return res.status(409).json({
+        message: "This information is already in use"
+      });
+    }
+
+    return res.status(500).json({
+      message: "Server error"
+    });
   }
 };
 

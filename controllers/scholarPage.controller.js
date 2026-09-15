@@ -233,7 +233,13 @@ exports.createScholar = async (req, res) => {
       await prisma.scholar_references.updateMany({ where: { version_id: version.version_id, status: "pending" }, data: { status: "approved" } });
     }
  
-    const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+    const admins = await prisma.users.findMany({ 
+      where: { 
+        roles: { role_name: "admin" },
+        notifications_enabled: true // 👈 THIS IS THE FIX
+      }, 
+      select: { id: true } 
+    });
     //⭐
     if (admins.length > 0) {
       await prisma.notifications.createMany({
@@ -269,6 +275,8 @@ exports.getPublishedScholars = async (req, res) => {
     century,
     century_calendar = "gregorian",
     discipline,
+     minYear,  
+    maxYear,
   } = req.query;
 
   try {
@@ -311,6 +319,7 @@ exports.getPublishedScholars = async (req, res) => {
       };
     }
 
+    // ✅ 1. KEEP THIS: For filtering by a specific century number (e.g., ?century=10)
     if (century) {
       const c = parseInt(century);
 
@@ -323,18 +332,50 @@ exports.getPublishedScholars = async (req, res) => {
       }
     }
 
-    // CHANGED: discipline now filters on the version (scholar_disciplines
-    // is keyed by version_id), not on the scholar directly — a discipline
-    // tag can differ per language version, so it has to be part of
-    // versionWhere, same as region/century.
+    // ✅ ERA FILTERING: Use the scholar's DEATH YEAR
+if (minYear || maxYear) {
+  const min = minYear ? parseInt(minYear) : 0;
+  const max = maxYear ? parseInt(maxYear) : 9999;
+
+  versionWhere.scholar_dates = {
+    some: {
+      date_type: "death",
+      calendar: "gregorian",
+      year: {
+        gte: min,
+        lte: max,
+      },
+    },
+  };
+}
+
+    // ✅ DEBUG LOG: Add this right before the prisma.scholars.findMany call
+    console.log("🔍 DEBUG versionWhere:", JSON.stringify(versionWhere, null, 2));
+
+    // ✅ ROBUST DISCIPLINE FILTER: Handles both ID (e.g., "1") and Name (e.g., "الفلسفة")
     if (discipline) {
-      versionWhere.scholar_disciplines = {
-        some: {
-          discipline_id: {
-            in: discipline.split(",").map(Number),
+      const parsed = discipline.split(",").map(d => {
+        const num = Number(d);
+        return isNaN(num) ? d.trim() : num;
+      });
+
+      if (parsed.every(id => typeof id === 'number')) {
+        // Case 1: It's an ID (or comma-separated IDs)
+        versionWhere.scholar_disciplines = {
+          some: {
+            discipline_id: { in: parsed }, // Pure JS, no TypeScript 'as'
           },
-        },
-      };
+        };
+      } else {
+        // Case 2: It's a Name (passed from the Home page)
+        versionWhere.scholar_disciplines = {
+          some: {
+            disciplines: {
+              name: discipline, // Exact match for the discipline name
+            },
+          },
+        };
+      }
     }
 
     const scholarWhere = {
@@ -1186,7 +1227,13 @@ exports.editScholar = async (req, res) => {
       }
     }
 
-    const admins = await prisma.users.findMany({ where: { roles: { role_name: "admin" } }, select: { id: true } });
+    const admins = await prisma.users.findMany({ 
+      where: { 
+        roles: { role_name: "admin" },
+        notifications_enabled: true // 👈 THIS IS THE FIX
+      }, 
+      select: { id: true } 
+    });
     //⭐
     if (admins.length > 0) {
       await prisma.notifications.createMany({
