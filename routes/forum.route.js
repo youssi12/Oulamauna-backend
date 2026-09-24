@@ -12,29 +12,30 @@ const {
   toggleCommentLike,
   reportPost,
   reportComment,
-   getCategories,
+  getCategories,
 } = require("../controllers/Forum.controller");
 
+// ✅ 1. Import the middlewares
 const protect = require("../middlewares/auth.middleware");
-router.get("/categories", getCategories);
-router.use(protect);
+const optionalAuth = require("../middlewares/optionalAuth.middleware");
 
-// Posts
-router.post("/posts", createPost);
-router.get("/posts", getPosts);
-router.get("/posts/:id", getPostById);
-router.delete("/posts/:id", deletePost);
+// ── READ: Anyone can view categories and posts (Guests or Logged-in) ──
+router.get("/categories", optionalAuth, getCategories);
+router.get("/posts", optionalAuth, getPosts);
+router.get("/posts/:id", optionalAuth, getPostById);
 
-// Comments (nested under a post for creation, flat for delete/like)
-router.post("/posts/:post_id/comments", createComment);
-router.delete("/comments/:id", deleteComment);
+// ── ACTIONS: Must be logged in and NOT banned ──
+// (Note: We DO NOT use checkContributionAccess here. Revoked users can still use the forum!)
+router.post("/posts", protect, createPost);
+router.delete("/posts/:id", protect, deletePost); // Controller will check if they are the author
 
-// Likes
-router.post("/posts/:id/like", togglePostLike);
-router.post("/comments/:id/like", toggleCommentLike);
+router.post("/posts/:post_id/comments", protect, createComment);
+router.delete("/comments/:id", protect, deleteComment); // Controller will check if they are the author
 
-// Reports
-router.post("/posts/:id/report", reportPost);
-router.post("/comments/:id/report", reportComment);
+router.post("/posts/:id/like", protect, togglePostLike);
+router.post("/comments/:id/like", protect, toggleCommentLike);
+
+router.post("/posts/:id/report", protect, reportPost);
+router.post("/comments/:id/report", protect, reportComment);
 
 module.exports = router;

@@ -123,6 +123,12 @@ const uploadProfilePicture = createUploader(
   imageMimeTypes
 );
 
+const uploadDisciplineImage = createUploader(
+  "oulamauna/disciplines",
+  imageFormats,
+  imageMimeTypes
+);
+
 // ------------------------------------------------------
 // Combined uploader for createScholar (dynamic field names)
 // ------------------------------------------------------
@@ -183,5 +189,6 @@ module.exports = {
   uploadMedia,
   uploadScholarImage,
   uploadScholarBundle,
-  uploadProfilePicture
+  uploadProfilePicture,
+  uploadDisciplineImage,
 };

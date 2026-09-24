@@ -209,8 +209,13 @@ exports.login = async (req, res) => {
     });
     if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
-    if (user.is_banned)
-      return res.status(403).json({ message: "Your account has been banned" });
+    // ✅ UPDATED: Added the 'code' field so the frontend can detect it
+    if (user.is_banned) {
+      return res.status(403).json({ 
+        message: "Your account has been banned",
+        code: "ACCOUNT_BANNED" 
+      });
+    }
 
     const match = await bcrypt.compare(password, user.password_hash);
     if (!match)
@@ -315,6 +320,8 @@ exports.resetPassword = async (req, res) => {
     res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
+
 
 
 

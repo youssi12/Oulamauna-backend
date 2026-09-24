@@ -19,7 +19,7 @@ exports.createScholar = async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" });
   }
  
-  const { scholar_id, canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, dates, biography, language_id, discipline_ids, references, works, media, relationships } = payload;
+  const { draft_version_id,scholar_id, canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, dates, biography, language_id, discipline_ids, references, works, media, relationships } = payload;
   const userId = req.user.id;
   const filesByField = {};
   (req.files || []).forEach((f) => { filesByField[f.fieldname] = f; });
@@ -125,20 +125,21 @@ exports.createScholar = async (req, res) => {
     if (parsedRegionId) {
       const region = await prisma.regions.findUnique({ where: { region_id: parsedRegionId } });
       if (!region) return res.status(400).json({ success: false, message: "Invalid region." });
-      if (parsedLanguageId && region.language_id !== parsedLanguageId) return res.status(400).json({ success: false, message: "region_id does not belong to the given language_id." });
+      // ✅ REMOVED: region.language_id check because regions are now multilingual/global
     }
     if (discipline_ids && discipline_ids.length > 0) {
       const found = await prisma.disciplines.findMany({ where: { discipline_id: { in: discipline_ids } } });
       if (found.length !== discipline_ids.length) return res.status(400).json({ success: false, message: "One or more disciplines are invalid." });
     }
  
-    let existingScholar = null;
-    if (scholar_id) {
-      existingScholar = await prisma.scholars.findUnique({ where: { scholar_id: parseInt(scholar_id) } });
-      if (!existingScholar) return res.status(404).json({ success: false, message: "Scholar not found" });
-      if (parsedLanguageId) {
-        const existingVersion = await prisma.scholar_versions.findFirst({ where: { scholar_id: parseInt(scholar_id), language_id: parsedLanguageId, status: "approved" } });
-        if (existingVersion) return res.status(400).json({ success: false, message: "An approved version in this language already exists for this scholar" });
+    // ✅ If this submission came from a draft, we reuse that row instead of creating a new one
+    let draftVersion = null;
+    if (draft_version_id) {
+      draftVersion = await prisma.scholar_versions.findUnique({
+        where: { version_id: parseInt(draft_version_id) },
+      });
+      if (!draftVersion || draftVersion.status !== "draft" || draftVersion.created_by !== userId) {
+        return res.status(404).json({ success: false, message: "Draft not found" });
       }
     }
  
@@ -147,24 +148,59 @@ exports.createScholar = async (req, res) => {
     const initialStatus = isUserAdmin ? "approved" : "pending";
 
     const { scholar, version } = await prisma.$transaction(async (tx) => {
-      const scholar = existingScholar ? existingScholar : await tx.scholars.create({ data: { created_by: userId, created_at: new Date() } });
-      const version = await tx.scholar_versions.create({
-        data: {
-          scholar_id: scholar.scholar_id,
-          language_id: parsedLanguageId,
-          canonical_name,
-          region_id: parsedRegionId,
-          century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
-          century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
-          century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
-          century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
-          biography,
-          version_type: "creation",
-          status: initialStatus, // 👈 DYNAMIC STATUS
-          created_by: userId,
-          created_at: new Date(),
-        },
-      });
+      const versionData = {
+        language_id: parsedLanguageId,
+        canonical_name,
+        region_id: parsedRegionId,
+        century_hijri_start: century_hijri_start ? parseInt(century_hijri_start) : null,
+        century_hijri_end: century_hijri_end ? parseInt(century_hijri_end) : null,
+        century_gregorian_start: century_gregorian_start ? parseInt(century_gregorian_start) : null,
+        century_gregorian_end: century_gregorian_end ? parseInt(century_gregorian_end) : null,
+        biography,
+        status: initialStatus,
+      };
+
+      let scholar, version;
+
+      if (draftVersion) {
+        // ✅ SAME row: draft -> pending/approved. No duplicate created.
+        scholar = await tx.scholars.findUnique({ where: { scholar_id: draftVersion.scholar_id } });
+        version = await tx.scholar_versions.update({
+          where: { version_id: draftVersion.version_id },
+          data: versionData,
+        });
+
+        // the payload re-sends everything, so wipe what saveDraft stored
+        const vid = version.version_id;
+        await tx.scholar_aliases.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_dates.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_disciplines.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_works.deleteMany({ where: { version_id: vid } });
+        await tx.media.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_references.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_relationships.deleteMany({ where: { version_id: vid } });
+      } else {
+        // 1. If scholar_id is provided, find it. Otherwise, create a new scholar.
+        scholar = scholar_id
+          ? await tx.scholars.findUnique({ where: { scholar_id: parseInt(scholar_id) } })
+          : await tx.scholars.create({ data: { created_by: userId, created_at: new Date() } });
+
+        // 2. Safety check: if they provided a scholar_id but it doesn't exist, throw an error.
+        if (scholar_id && !scholar) {
+          throw new Error("Scholar not found");
+        }
+
+        // 3. Create the new version
+        version = await tx.scholar_versions.create({
+          data: {
+            ...versionData,
+            scholar_id: scholar.scholar_id,
+            version_type: scholar_id ? "edition" : "creation", // ✅ Fixed: use "edition" if adding to existing scholar
+            created_by: userId,
+            created_at: new Date(),
+          },
+        });
+      }
  
       if (aliases && aliases.length > 0) await tx.scholar_aliases.createMany({ data: aliases.map((alias) => ({ version_id: version.version_id, alias_name: alias })) });
       if (dates && dates.length > 0) {
@@ -247,7 +283,7 @@ exports.createScholar = async (req, res) => {
           user_id: admin.id,
           type: "NEW_SCHOLAR_SUBMISSION",
           message: scholar_id ? `New language version submitted for scholar ID ${scholar.scholar_id}: "${canonical_name}"` : `New scholar submitted: "${canonical_name}"`,
-          related_entity: `scholar:${scholar.scholar_id}`,
+          related_entity: `scholar_version:${version.version_id}`,
           is_read: false,
           created_at: new Date(),
         })),
@@ -723,7 +759,10 @@ exports.deleteDraft = async (req, res) => {
       await tx.media.deleteMany({ where: { version_id: versionId } });
       await tx.scholar_references.deleteMany({ where: { version_id: versionId } });
       await tx.scholar_relationships.deleteMany({ where: { version_id: versionId } });
+      await tx.scholar_relationships.deleteMany({ where: { related_version_id: versionId } });
+      await tx.img_versions.deleteMany({ where: { version_id: versionId } });
       
+
       // 3. Finally, delete the draft version itself
       await tx.scholar_versions.delete({ where: { version_id: versionId } });
     });
@@ -862,73 +901,31 @@ exports.submitDraft = async (req, res) => {
 
 exports.getScholarById = async (req, res) => {
   const scholarId = parseInt(req.params.id);
-  const { lang } = req.query; // e.g. ?lang=ar
+  const requestedLang = req.query.lang || "ar";
 
   try {
-    // Resolve language_id from code if provided
-    let languageFilter = {};
-    if (lang) {
-      const language = await prisma.languages.findFirst({
-        where: { code: lang },
-      });
-
-      if (language) {
-        languageFilter = { language_id: language.language_id };
-      }
-    }
-
-        const scholar = await prisma.scholars.findUnique({
+    // 1. Get the scholar and ALL their approved versions
+    const scholar = await prisma.scholars.findUnique({
       where: { scholar_id: scholarId },
       include: {
+        scholar_contributors: {
+          include: { users: { select: { id: true, username: true } } },
+        },
         scholar_versions: {
-          where: {
-            status: "approved",
-            ...languageFilter,
-          },
-          orderBy: {
-            created_at: "desc",
-          },
-          take: 1,
+          where: { status: "approved" },
+          orderBy: { created_at: "desc" },
           include: {
-            scholar_aliases: true,
             languages: true,
             regions: true,
+            scholar_aliases: true,
             scholar_dates: true,
-            media: {
-              where: { status: "approved" },
-              include: {
-                users: { select: { id: true, username: true } },
-                // ✅ ALWAYS fetch the user_ids of people who liked this media
-                media_likes: { select: { user_id: true } } 
-              },
+            scholar_disciplines: { include: { disciplines: true } },
+            scholar_works: { where: { status: "approved" }, include: { users: { select: { id: true, username: true } } } },
+            media: { 
+              where: { status: "approved" }, 
+              include: { users: { select: { id: true, username: true } }, media_likes: { select: { user_id: true } } } 
             },
-            internal_links: {
-              include: {
-                scholars: true,
-              },
-            },
-            scholar_disciplines: {
-              include: {
-                disciplines: true,
-              },
-            },
-            comments: {
-              where: {
-                deleted_at: null,
-              },
-              include: {
-                users: {
-                  select: {
-                    id: true,
-                    username: true,
-                  },
-                },
-              },
-              orderBy: {
-                created_at: "desc",
-              },
-            },
-            // ✅ MOVED HERE: Relationships now belong to the VERSION, not the scholar
+            scholar_references: { where: { status: "approved" } },
             scholar_relationships_as_source: {
               include: {
                 related_scholar_version: {
@@ -938,121 +935,63 @@ exports.getScholarById = async (req, res) => {
                   }
                 }
               }
-            }
-          } // <-- This closes scholar_versions include
-        }, // <-- This closes scholar_versions
-
-       
-
-        scholar_contributors: {
-          include: {
-            users: {
-              select: {
-                id: true,
-                username: true,
-              },
             },
-          },
+            users: { select: { id: true, username: true } } // For history
+          }
         }
-        // ❌ REMOVED scholar_relationships_as_source from this level
-        
-      }, // <-- This closes the main include
+      }
     });
 
-    if (!scholar || scholar.scholar_versions.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: lang
-          ? `Scholar not found in language "${lang}"`
-          : "Scholar not found",
-      });
+    if (!scholar) {
+      return res.status(404).json({ success: false, message: "Scholar not found" });
     }
 
-    // Current approved version
-    const currentVersion = scholar.scholar_versions[0];
-
-    // ── Mask an unapproved image — image_url/image_status are scalar
-    // columns on scholar_versions, not a related table, so they can't
-    // be filtered via `where` inside the include like media/works/refs. ──
-    // NOTE: still correct under img_versions, same reasoning as above.
-    if (currentVersion.image_status !== "approved") {
-      currentVersion.image_url = null;
+    // 2. ✅ DYNAMIC FALLBACK: Reorder versions so the requested language is first (if it exists)
+    let versions = scholar.scholar_versions;
+    const language = await prisma.languages.findFirst({ where: { code: requestedLang } });
+    
+    if (language) {
+      const requestedVersionIndex = versions.findIndex(v => v.language_id === language.language_id);
+      if (requestedVersionIndex !== -1) {
+        // Move the requested language version to the front of the array
+        const [requestedVersion] = versions.splice(requestedVersionIndex, 1);
+        versions.unshift(requestedVersion);
+      }
     }
 
-    // References for this version — FIX: added status:"approved" filter.
-    // This was previously unfiltered, so pending/rejected references
-    // were leaking into a public endpoint.
-    const references = await prisma.scholar_references.findMany({
-      where: {
-        version_id: currentVersion.version_id,
-        status: "approved",
-      },
-      orderBy: {
-        reference_id: "asc",
-      },
-    });
+    // If after all that, there are STILL no approved versions, return 404
+    if (versions.length === 0) {
+      return res.status(404).json({ success: false, message: "Scholar has no approved versions" });
+    }
 
-    // Works for this version — FIX: same missing filter as references.
-    const works = await prisma.scholar_works.findMany({
-  where: {
-    version_id: currentVersion.version_id,
-    status: "approved",
-  },
-  include: {
-    users: { select: { id: true, username: true } },
-  },
-  orderBy: {
-    year: "desc",
-  },
-});
+    // 3. Build the history array from the versions
+    const history = versions.map(v => ({
+      version_id: v.version_id,
+      status: v.status,
+      created_at: v.created_at,
+      users: v.users
+    }));
 
-    // Revision history for this scholar in the same language
-    const history = await prisma.scholar_versions.findMany({
-      where: {
-        scholar_id: scholarId,
-        language_id: currentVersion.language_id,
-      },
-      include: {
-        users: {
-          select: {
-            id: true,
-            username: true,
-          },
-        },
-      },
-      orderBy: {
-        created_at: "desc",
-      },
-    });
+    // 4. Mask unapproved images on the primary version (which is now versions[0])
+    const primaryVersion = versions[0];
+    if (primaryVersion.image_status !== "approved") {
+      primaryVersion.image_url = null;
+    }
 
-    // Available languages
-    const availableLanguages = await prisma.scholar_versions.findMany({
-      where: {
-        scholar_id: scholarId,
-        status: "approved",
-      },
-      select: {
-        languages: true,
-      },
-      distinct: ["language_id"],
-    });
-
+    // 5. Return the scholar with the reordered versions array
     res.json({
       success: true,
       data: {
         ...scholar,
-        references,
-        history,
-        works,
-        available_languages: availableLanguages.map((v) => v.languages),
+        scholar_versions: versions, // Frontend will use versions[0] as the active version
+        history: history,
+        available_languages: versions.map(v => v.languages).filter(Boolean)
       },
     });
+
   } catch (error) {
     console.error("getScholarById error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
   
@@ -1065,7 +1004,7 @@ exports.editScholar = async (req, res) => {
     try { payload = JSON.parse(req.body.data); } catch (err) { return res.status(400).json({ success: false, message: "Invalid JSON in 'data' field" }); }
   }
 
-  const { canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, biography, discipline_ids, language_id = 1, dates, new_references, new_relationships } = payload;
+  const {  draft_version_id,canonical_name, aliases, region_id, century_hijri_start, century_hijri_end, century_gregorian_start, century_gregorian_end, biography, discipline_ids, language_id = 1, dates, new_references, new_relationships } = payload;
   const filesByField = {};
   (req.files || []).forEach((f) => { filesByField[f.fieldname] = f; });
   
@@ -1092,7 +1031,19 @@ exports.editScholar = async (req, res) => {
       orderBy: { created_at: "desc" },
     });
     if (!previousVersion) return res.status(404).json({ success: false, message: "No approved version exists for this scholar in this language" });
-
+    // ✅ If this edit came from a draft, reuse that row instead of creating a new one
+    let draftVersion = null;
+    if (draft_version_id) {
+      draftVersion = await prisma.scholar_versions.findUnique({
+        where: { version_id: parseInt(draft_version_id) },
+      });
+      if (!draftVersion || draftVersion.status !== "draft" || draftVersion.created_by !== userId) {
+        return res.status(404).json({ success: false, message: "Draft not found" });
+      }
+      if (draftVersion.scholar_id !== scholarId) {
+        return res.status(400).json({ success: false, message: "This draft belongs to a different scholar." });
+      }
+    }
     const finalCanonicalName = canonical_name ?? previousVersion.canonical_name;
     const finalRegionId = region_id !== undefined ? (region_id === null ? null : parseInt(region_id)) : previousVersion.region_id;
     const finalHijriStart = century_hijri_start !== undefined ? (century_hijri_start === null ? null : parseInt(century_hijri_start)) : previousVersion.century_hijri_start;
@@ -1116,14 +1067,42 @@ exports.editScholar = async (req, res) => {
     const initialStatus = isUserAdmin ? "approved" : "pending";
 
     const newVersion = await prisma.$transaction(async (tx) => {
-      const version = await tx.scholar_versions.create({
-        data: {
-          scholar_id: scholarId, language_id: parsedLanguageId, canonical_name: finalCanonicalName, region_id: finalRegionId,
-          century_hijri_start: finalHijriStart, century_hijri_end: finalHijriEnd, century_gregorian_start: finalGregorianStart, century_gregorian_end: finalGregorianEnd,
-          biography: finalBiography, image_url: finalImageUrl, image_status: finalImageStatus, image_uploaded_by: finalImageUploadedBy,
-          version_type: "edition", status: initialStatus, created_by: userId, created_at: new Date(),
-        },
-      });
+      const versionData = {
+        language_id: parsedLanguageId, canonical_name: finalCanonicalName, region_id: finalRegionId,
+        century_hijri_start: finalHijriStart, century_hijri_end: finalHijriEnd, century_gregorian_start: finalGregorianStart, century_gregorian_end: finalGregorianEnd,
+        biography: finalBiography, image_url: finalImageUrl, image_status: finalImageStatus, image_uploaded_by: finalImageUploadedBy,
+        status: initialStatus,
+      };
+
+      let version;
+
+      if (draftVersion) {
+        // ✅ SAME row: draft -> pending/approved. No duplicate created.
+        version = await tx.scholar_versions.update({
+          where: { version_id: draftVersion.version_id },
+          data: versionData,
+        });
+
+        // wipe what saveDraft stored — the carry-over + payload below re-creates everything
+        const vid = version.version_id;
+        await tx.scholar_aliases.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_dates.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_disciplines.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_works.deleteMany({ where: { version_id: vid } });
+        await tx.media.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_references.deleteMany({ where: { version_id: vid } });
+        await tx.scholar_relationships.deleteMany({ where: { version_id: vid } });
+      } else {
+        version = await tx.scholar_versions.create({
+          data: {
+            ...versionData,
+            scholar_id: scholarId,
+            version_type: "edition",
+            created_by: userId,
+            created_at: new Date(),
+          },
+        });
+      }
 
       if (finalAliases.length > 0) await tx.scholar_aliases.createMany({ data: finalAliases.map((alias) => ({ version_id: version.version_id, alias_name: typeof alias === "string" ? alias : alias.alias_name })) });
       if (finalDisciplineIds.length > 0) await tx.scholar_disciplines.createMany({ data: finalDisciplineIds.map((did) => ({ version_id: version.version_id, discipline_id: did })), skipDuplicates: true });
@@ -1179,7 +1158,7 @@ exports.editScholar = async (req, res) => {
           await tx.scholar_references.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
           await tx.scholar_relationships.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
           await tx.img_versions.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } });
-          await tx.comments.updateMany({ where: { version_id: oldApproved.version_id }, data: { version_id: version.version_id } }); // ✅ COMMENTS CARRIED OVER
+          
 
           // 2. Supersede the old version
           await tx.scholar_versions.update({ where: { version_id: oldApproved.version_id }, data: { status: "superseded" } });
@@ -1358,10 +1337,7 @@ exports.getVersionById = async (req, res) => {
 
 
 exports.getScholarByName = async (req, res) => {
-  const {
-    q,
-    lang = "ar",
-  } = req.query;
+  const { q } = req.query;
 
   if (!q) {
     return res.status(400).json({
@@ -1371,39 +1347,14 @@ exports.getScholarByName = async (req, res) => {
   }
 
   try {
-    // Requested language
-    const requestedLanguage = await prisma.languages.findFirst({
-      where: {
-        code: lang,
-      },
-    });
-
-    // ---------------------------------
-    // Search by canonical name or alias
-    // ---------------------------------
-
+    // 1. Find ANY approved version that matches the name or alias
     const matchedVersion = await prisma.scholar_versions.findFirst({
       where: {
         status: "approved",
         OR: [
-          {
-            canonical_name: {
-              contains: q,
-            },
-          },
-          {
-            scholar_aliases: {
-              some: {
-                alias_name: {
-                  contains: q,
-                },
-              },
-            },
-          },
+          { canonical_name: { contains: q } },
+          { scholar_aliases: { some: { alias_name: { contains: q } } } },
         ],
-      },
-      include: {
-        scholar_aliases: true,
       },
     });
 
@@ -1414,72 +1365,19 @@ exports.getScholarByName = async (req, res) => {
       });
     }
 
-    // ---------------------------------
-    // Try requested language first
-    // ---------------------------------
-
-    let version = null;
-
-    if (requestedLanguage) {
-      version = await prisma.scholar_versions.findFirst({
-        where: {
-          scholar_id: matchedVersion.scholar_id,
-          language_id: requestedLanguage.language_id,
-          status: "approved",
-        },
-      });
-    }
-
-    // ---------------------------------
-    // Fallback to any approved language
-    // ---------------------------------
-
-    if (!version) {
-      version = await prisma.scholar_versions.findFirst({
-        where: {
-          scholar_id: matchedVersion.scholar_id,
-          status: "approved",
-        },
-        orderBy: {
-          created_at: "asc",
-        },
-      });
-    }
-
-    if (!version) {
-      return res.status(404).json({
-        success: false,
-        message: "No approved version found",
-      });
-    }
-
-    // ---------------------------------
-    // Return full scholar
-    // ---------------------------------
-
+    // 2. ✅ THE FIX: Fetch the scholar and ALL their approved versions!
     const scholar = await prisma.scholars.findUnique({
-      where: {
-        scholar_id: version.scholar_id,
-      },
+      where: { scholar_id: matchedVersion.scholar_id },
       include: {
         scholar_versions: {
-          where: {
-            version_id: version.version_id,
-          },
+          where: { status: "approved" }, // ✅ Returns ALL languages instead of just one!
           include: {
             scholar_aliases: true,
-            // FIX: added status:"approved" filters — these were
-            // previously unfiltered (scholar_references: true /
-            // scholar_works: true), leaking pending/rejected items.
-            scholar_references: {
-              where: { status: "approved" },
-            },
+            scholar_references: { where: { status: "approved" } },
             scholar_works: {
-  where: { status: "approved" },
-  include: { users: { select: { id: true, username: true } } },
-},
-            
-            
+              where: { status: "approved" },
+              include: { users: { select: { id: true, username: true } } },
+            },
             media: {
               where: { status: "approved" },
               include: { users: { select: { id: true, username: true } } },
@@ -1487,44 +1385,30 @@ exports.getScholarByName = async (req, res) => {
             languages: true,
             regions: true,
             scholar_dates: true,
-            // CHANGED: disciplines moved here — version-scoped now.
-            scholar_disciplines: {
-              include: {
-                disciplines: true,
-              },
-            },
-            // CHANGED: comments moved here — each version has its own
-            // thread now instead of one shared across all languages.
-            comments: {
-              where: { deleted_at: null },
-              include: {
-                users: {
-                  select: { id: true, username: true },
-                },
-              },
-              orderBy: { created_at: "desc" },
-            },
+            scholar_disciplines: { include: { disciplines: true } },
           },
         },
       },
     });
 
-    // ── Mask an unapproved image on the returned version, same reason
-    // as getScholarById — image_url/image_status are scalar columns,
-    // not a related table, so they can't be filtered via `where`. ──
-    const returnedVersion = scholar?.scholar_versions?.[0];
-    if (returnedVersion && returnedVersion.image_status !== "approved") {
-      returnedVersion.image_url = null;
+    if (!scholar || scholar.scholar_versions.length === 0) {
+      return res.status(404).json({ success: false, message: "No approved versions found" });
     }
+
+    // 3. Mask unapproved images on all versions
+    scholar.scholar_versions.forEach((v) => {
+      if (v.image_status !== "approved") {
+        v.image_url = null;
+      }
+    });
 
     return res.json({
       success: true,
-      data: scholar,
+      data: scholar, // Frontend will now receive the full array of all available languages
     });
 
   } catch (err) {
-    console.error(err);
-
+    console.error("getScholarByName error:", err);
     return res.status(500).json({
       success: false,
       message: "Server error",
@@ -1679,10 +1563,78 @@ exports.updateRejectedVersion = async (req, res) => {
       if (references?.length) await tx.scholar_references.createMany({ data: references.map((r) => ({ version_id: versionId, title: r.title || "", citation: r.citation || "", url: r.url || null, created_by: userId, status: "pending" })) });
       
       if (relationships?.length) {
-        for (const rel of relationships) {
-          await tx.scholar_relationships.create({ data: { version_id: versionId, related_version_id: parseInt(rel.related_version_id), relation_type: rel.relation_type } });
-        }
+  const relatedVersionIds = [
+    ...new Set(
+      relationships.map((r) => parseInt(r.related_version_id))
+    )
+  ];
+
+  const relatedVersions = await tx.scholar_versions.findMany({
+    where: {
+      version_id: { in: relatedVersionIds }
+    },
+    select: {
+      version_id: true,
+      scholar_id: true,
+      canonical_name: true
+    }
+  });
+
+  const seenInRequest = new Set();
+
+  for (const rel of relationships) {
+    const targetVId = parseInt(rel.related_version_id);
+    const type = rel.relation_type;
+    const key = `${targetVId}-${type}`;
+
+    // 1. related_version_id is required
+    if (!targetVId) {
+      throw new Error(
+        "related_version_id is required for every relationship."
+      );
+    }
+
+    // 2. Only teacher or student
+    if (!["teacher", "student"].includes(type)) {
+      throw new Error(
+        "relation_type must be 'teacher' or 'student'."
+      );
+    }
+
+    // 3. Check that the related version exists
+    const targetScholar = relatedVersions.find(
+      (v) => v.version_id === targetVId
+    );
+
+    if (!targetScholar) {
+      throw new Error(
+        `Related version ${targetVId} not found.`
+      );
+    }
+
+    // 4. A scholar cannot relate to themselves
+    if (targetScholar.scholar_id === version.scholar_id) {
+      throw new Error(
+        "A scholar cannot have a relationship with themselves."
+      );
+    }
+
+    // 5. Prevent duplicate relationships in the same request
+    if (seenInRequest.has(key)) {
+      continue;
+    }
+
+    seenInRequest.add(key);
+
+    await tx.scholar_relationships.create({
+      data: {
+        version_id: versionId,
+        related_version_id: targetVId,
+        relation_type: type
       }
+    });
+  }
+}
     });
 
     // 4. Notify admins ONLY if resubmitting to pending
@@ -1693,7 +1645,7 @@ exports.updateRejectedVersion = async (req, res) => {
         await prisma.notifications.createMany({
           data: admins.map((admin) => ({
             user_id: admin.id,
-            type: "RESUBMITTED_SCHOLAR",
+            type: "NEW_SCHOLAR_SUBMISSION",
             message: `A rejected scholar version (ID: ${versionId}) has been resubmitted for review: "${canonical_name}"`,
             related_entity: `scholar_version:${versionId}`,
             is_read: false,
@@ -1734,7 +1686,16 @@ exports.deleteRejectedVersion = async (req, res) => {
       await tx.scholar_works.deleteMany({ where: { version_id: versionId } });
       await tx.media.deleteMany({ where: { version_id: versionId } });
       await tx.scholar_references.deleteMany({ where: { version_id: versionId } });
+
+      // ✅ this version as the SOURCE of a relationship
       await tx.scholar_relationships.deleteMany({ where: { version_id: versionId } });
+      // ✅ this version as the TARGET of someone else's relationship
+      await tx.scholar_relationships.deleteMany({ where: { related_version_id: versionId } });
+
+      // ✅ other tables that reference this version and were previously missed
+      await tx.img_versions.deleteMany({ where: { version_id: versionId } });
+      
+
       await tx.scholar_versions.delete({ where: { version_id: versionId } });
     });
 

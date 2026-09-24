@@ -10,50 +10,59 @@ exports.createPost = async (req, res) => {
   const userId = req.user.id;
   const { title, content, category_id } = req.body;
 
-    
   if (!title || !content || !category_id) {
-    return res.status(400).json({ success: false, message: "title,content and category are required" });
+    return res.status(400).json({ success: false, message: "title, content and category are required" });
   }
 
   try {
-
     if (category_id) {
       const category = await prisma.forum_categories.findUnique({
         where: { category_id: parseInt(category_id) },
       });
-
-     
       if (!category) {
         return res.status(400).json({ success: false, message: "Invalid category_id" });
       }
     }
 
-   const post = await prisma.forum_posts.create({
-  data: {
-    user_id: userId,
-    category_id: category_id ? parseInt(category_id) : null,
-    title,
-    content,
-    created_at: new Date(),
-  },
-  // ✅ ADD THIS: Include user and category data in the response
-  include: {
-    users: { 
-      select: { 
-        id: true, 
-        username: true, 
-        name: true, 
-        profile_picture: true 
-      } 
-    },
-    forum_categories: true,
-    _count: {
-      select: { forum_comments: true }
-    }
-  },
-});
+    const post = await prisma.forum_posts.create({
+      data: {
+        user_id: userId,
+        category_id: category_id ? parseInt(category_id) : null,
+        title,
+        content,
+        created_at: new Date(),
+      },
+      include: {
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } },
+        forum_categories: true,
+        _count: { select: { forum_comments: true } }
+      },
+    });
 
-res.status(201).json({ success: true, data: post });
+    // ✅ Notify Admins
+    const admins = await prisma.users.findMany({
+      where: { 
+        roles: { role_name: "admin" }, 
+        notifications_enabled: true 
+      },
+      select: { id: true }
+    });
+
+    if (admins.length > 0) {
+      await prisma.notifications.createMany({
+        data: admins.map(admin => ({
+          user_id: admin.id,
+          type: "NEW_FORUM_POST",
+          message: `New forum post created: "${title}"`,
+          // ✅ BACKEND ONLY: Just saves the entity type and ID
+          related_entity: `forum_post:${post.post_id}`, 
+          is_read: false,
+          created_at: new Date(),
+        }))
+      });
+    }
+
+    res.status(201).json({ success: true, data: post });
 
   } catch (error) {
     console.error("createPost error:", error);
@@ -68,24 +77,35 @@ exports.getPosts = async (req, res) => {
   const userId = req.user?.id; // ✅ Get current user ID
 
   try {
-    const where = { deleted_at: null };
+    // ✅ ADDED: is_hidden: false so auto-hidden posts don't show to the public
+    const where = { deleted_at: null, is_hidden: false }; 
     if (category_id) where.category_id = parseInt(category_id);
 
-    const posts = await prisma.forum_posts.findMany({
-      where,
-      include: {
-        users: { select: { id: true, username: true, name: true, profile_picture: true } },
-        forum_categories: true,
-        _count: { select: { forum_comments: true } },
-        // ✅ ADD THIS: Check if current user liked the post
-        forum_post_likes: userId ? {
-          where: { user_id: userId },
-          select: { user_id: true }
-        } : false,
-      },
-      orderBy: { created_at: "desc" },
-      skip: (parseInt(page) - 1) * parseInt(limit),
-      take: parseInt(limit),
+        const posts = await prisma.forum_posts.findMany({ 
+      where, 
+      include: { 
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } }, 
+        forum_categories: true, 
+        // ✅ UPDATED: Only count comments that are NOT deleted and NOT hidden
+        _count: { 
+          select: { 
+            forum_comments: {
+              where: {
+                deleted_at: null,
+                is_hidden: false
+              }
+            } 
+          } 
+        },
+        // ✅ ADD THIS: Check if current user liked the post 
+        forum_post_likes: userId ? { 
+          where: { user_id: userId }, 
+          select: { user_id: true } 
+        } : false, 
+      }, 
+      orderBy: { created_at: "desc" }, 
+      skip: (parseInt(page) - 1) * parseInt(limit), 
+      take: parseInt(limit), 
     });
 
     // ✅ Format posts to add a clean 'liked' boolean
@@ -114,9 +134,9 @@ exports.getPostById = async (req, res) => {
 
   try {
     const post = await prisma.forum_posts.findUnique({
-      where: { post_id: postId },
+      where: { post_id: postId, is_hidden: false }, // ✅ ADDED: is_hidden
       include: {
-        users: { select: { id: true, username: true, name: true, profile_picture: true } },
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } },
         forum_categories: true,
         // ✅ ADD THIS
         forum_post_likes: userId ? {
@@ -138,9 +158,9 @@ exports.getPostById = async (req, res) => {
     };
 
     const comments = await prisma.forum_comments.findMany({
-      where: { post_id: postId, deleted_at: null },
+      where: { post_id: postId, deleted_at: null, is_hidden: false }, // ✅ ADDED: is_hidden
       include: {
-        users: { select: { id: true, username: true, name: true, profile_picture: true } },
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } },
         // ✅ ADD THIS for comments too
         forum_comment_likes: userId ? {
           where: { user_id: userId },
@@ -225,13 +245,12 @@ exports.createComment = async (req, res) => {
       const parent = await prisma.forum_comments.findUnique({
         where: { comment_id: parseInt(parent_comment_id) },
       });
-      // Parent must exist, belong to the SAME post, and not be deleted —
-      // otherwise a reply could end up attached to the wrong thread.
       if (!parent || parent.post_id !== postId || parent.deleted_at) {
         return res.status(400).json({ success: false, message: "Invalid parent_comment_id" });
       }
     }
 
+    // 1. Create the comment
     const comment = await prisma.forum_comments.create({
       data: {
         post_id: postId,
@@ -240,20 +259,96 @@ exports.createComment = async (req, res) => {
         content,
         created_at: new Date(),
       },
-      // ✅ ADD THIS: Include user data so the frontend shows your name/avatar instantly
       include: {
-        users: { 
-          select: { 
-            id: true, 
-            username: true, 
-            name: true, 
-            profile_picture: true 
-          } 
-        }
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } }
       },
     });
 
+    const notificationsToCreate = [];
+    const relatedEntity = `post:${post.post_id},comment:${comment.comment_id}`;
+
+    if (parent_comment_id) {
+      // ==========================================
+      // SCENARIO A: It's a reply to a comment
+      // ==========================================
+      
+      // 1. Notify the parent comment's author (unless they are replying to themselves)
+      const parentComment = await prisma.forum_comments.findUnique({
+        where: { comment_id: parseInt(parent_comment_id) },
+        select: { user_id: true }
+      });
+
+      if (parentComment && parentComment.user_id !== userId) {
+        const parentAuthor = await prisma.users.findUnique({
+          where: { id: parentComment.user_id },
+          select: { notifications_enabled: true }
+        });
+
+        if (parentAuthor?.notifications_enabled) {
+          notificationsToCreate.push({
+            user_id: parentComment.user_id,
+            type: "REPLY_TO_COMMENT",
+            message: `Someone replied to your comment on "${post.title}"`,
+            related_entity: relatedEntity,
+            is_read: false,
+            created_at: new Date(),
+          });
+        }
+      }
+
+      // ✅ 2. NEW: Notify the POST author about the new activity (unless they are the ones replying)
+      if (post.user_id !== userId) { 
+        const postAuthor = await prisma.users.findUnique({
+          where: { id: post.user_id },
+          select: { notifications_enabled: true }
+        });
+
+        if (postAuthor?.notifications_enabled) {
+          notificationsToCreate.push({
+            user_id: post.user_id,
+            type: "COMMENT_ON_POST",
+            message: `There is a new reply on your post: "${post.title}"`,
+            related_entity: relatedEntity,
+            is_read: false,
+            created_at: new Date(),
+          });
+        }
+      }
+
+    } else {
+      // ==========================================
+      // SCENARIO B: It's a top-level comment
+      // ==========================================
+      
+      // Notify the post's author (unless they are commenting on their own post)
+      if (post.user_id !== userId) { 
+        const postAuthor = await prisma.users.findUnique({
+          where: { id: post.user_id },
+          select: { notifications_enabled: true }
+        });
+
+        if (postAuthor?.notifications_enabled) {
+          notificationsToCreate.push({
+            user_id: post.user_id,
+            type: "COMMENT_ON_POST",
+            message: `Someone commented on your post: "${post.title}"`,
+            related_entity: relatedEntity,
+            is_read: false,
+            created_at: new Date(),
+          });
+        }
+      }
+    }
+
+    // Create all pending notifications in one go
+    if (notificationsToCreate.length > 0) {
+      await prisma.notifications.createMany({
+        data: notificationsToCreate
+      });
+    }
+
     res.status(201).json({ success: true, data: comment });
+
   } catch (error) {
     console.error("createComment error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -414,12 +509,17 @@ exports.reportPost = async (req, res) => {
   const { reason } = req.body;
 
   try {
-    const post = await prisma.forum_posts.findUnique({ where: { post_id: postId } });
+    // ✅ Added 'users' include to get the author's username for the notification
+    const post = await prisma.forum_posts.findUnique({ 
+      where: { post_id: postId },
+      include: { users: { select: { id: true, username: true } } } 
+    });
     if (!post || post.deleted_at) {
       return res.status(404).json({ success: false, message: "Post not found" });
     }
 
-    const report = await prisma.reports.create({
+    // 1. Create the report
+    await prisma.reports.create({
       data: {
         reporter_id: userId,
         content_type: "forum_post",
@@ -430,7 +530,43 @@ exports.reportPost = async (req, res) => {
       },
     });
 
-    res.status(201).json({ success: true, message: "Report submitted", data: report });
+    // 2. Count pending reports for this specific post
+    const reportCount = await prisma.reports.count({
+      where: {
+        content_type: "forum_post",
+        content_id: postId,
+        status: "pending",
+      },
+    });
+
+    // 3. ✅ AUTO-HIDE TRIGGER & URGENT NOTIFICATION
+    if (reportCount >= 5 && !post.is_hidden) {
+      await prisma.forum_posts.update({
+        where: { post_id: postId },
+        data: { is_hidden: true },
+      });
+
+      // ✅ Notify Admins of Auto-Hide
+      const admins = await prisma.users.findMany({
+        where: { roles: { role_name: "admin" }, notifications_enabled: true },
+        select: { id: true }
+      });
+
+      if (admins.length > 0) {
+        await prisma.notifications.createMany({
+          data: admins.map(admin => ({
+            user_id: admin.id,
+            type: "REPORT_SUBMITTED", 
+            message: `🚨 URGENT: A post by "${post.users?.username || 'Unknown'}" was auto-hidden after 5 reports.`,
+            related_entity: `forum_post:${postId}`,
+            is_read: false,
+            created_at: new Date(),
+          }))
+        });
+      }
+    }
+
+    res.status(201).json({ success: true, message: "Report submitted successfully" });
   } catch (error) {
     console.error("reportPost error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -443,12 +579,17 @@ exports.reportComment = async (req, res) => {
   const { reason } = req.body;
 
   try {
-    const comment = await prisma.forum_comments.findUnique({ where: { comment_id: commentId } });
+    // ✅ Added 'users' include to get the author's username for the notification
+    const comment = await prisma.forum_comments.findUnique({ 
+      where: { comment_id: commentId },
+      include: { users: { select: { id: true, username: true } } } 
+    });
     if (!comment || comment.deleted_at) {
       return res.status(404).json({ success: false, message: "Comment not found" });
     }
 
-    const report = await prisma.reports.create({
+    // 1. Create the report
+    await prisma.reports.create({
       data: {
         reporter_id: userId,
         content_type: "forum_comment",
@@ -459,7 +600,43 @@ exports.reportComment = async (req, res) => {
       },
     });
 
-    res.status(201).json({ success: true, message: "Report submitted", data: report });
+    // 2. Count pending reports for this specific comment
+    const reportCount = await prisma.reports.count({
+      where: {
+        content_type: "forum_comment",
+        content_id: commentId,
+        status: "pending",
+      },
+    });
+
+    // 3. ✅ AUTO-HIDE TRIGGER & URGENT NOTIFICATION
+    if (reportCount >= 3 && !comment.is_hidden) {
+      await prisma.forum_comments.update({
+        where: { comment_id: commentId },
+        data: { is_hidden: true },
+      });
+
+      // ✅ Notify Admins of Auto-Hide
+      const admins = await prisma.users.findMany({
+        where: { roles: { role_name: "admin" }, notifications_enabled: true },
+        select: { id: true }
+      });
+
+      if (admins.length > 0) {
+        await prisma.notifications.createMany({
+          data: admins.map(admin => ({
+            user_id: admin.id,
+            type: "REPORT_SUBMITTED",
+            message: `🚨 URGENT: A comment by "${comment.users?.username || 'Unknown'}" was auto-hidden after 3 reports.`,
+            related_entity: `forum_comment:${commentId}`,
+            is_read: false,
+            created_at: new Date(),
+          }))
+        });
+      }
+    }
+
+    res.status(201).json({ success: true, message: "Report submitted successfully" });
   } catch (error) {
     console.error("reportComment error:", error);
     res.status(500).json({ success: false, message: "Server error" });
@@ -473,34 +650,45 @@ exports.getCategories = async (req, res) => {
   try {
     const categories = await prisma.forum_categories.findMany({
       orderBy: { display_order: "asc" },
-      select: {
-        category_id: true,
-        name: true,
-        translations: true,
-        description: true,
-        display_order: true,
+      include: {
         _count: {
           select: {
-            forum_posts: {
-              where: { deleted_at: null } // ✅ only count non-deleted posts
-            }
+            forum_posts: { where: { deleted_at: null } }
           }
         }
-      },
+      }
     });
 
-    const formattedCategories = categories.map(cat => ({
-      ...cat,
-      post_count: cat._count.forum_posts,
-    }));
+    const formattedCategories = categories.map(cat => {
+      let parsed = cat.translations;
+      
+      // Safely parse the JSON string from the database
+      if (typeof parsed === 'string') {
+        try { 
+          parsed = JSON.parse(parsed); 
+        } catch (e) { 
+          parsed = {}; 
+        }
+      }
+      
+      // If it's not a valid object, default to an empty object
+      if (!parsed || typeof parsed !== 'object') {
+        parsed = {};
+      }
+
+      return {
+        ...cat,
+        translations: parsed, // ✅ DYNAMIC: Sends the ENTIRE translation object (en, ar, fr, es, etc.)
+        post_count: cat._count.forum_posts
+      };
+    });
 
     res.json({ success: true, data: formattedCategories });
   } catch (error) {
     console.error("getCategories error:", error);
-    res.status(500).json({ success: false, message: "Server error" });
+    res.status(500).json({ success: false, message: "Server error: " + error.message });
   }
 };
-
 // ── Helper: recursively collect all descendant comment ids of a given comment ──
 // Accepts a Prisma client so it also works inside a $transaction (tx).
 async function getDescendantCommentIds(client, commentId) {
@@ -548,8 +736,19 @@ exports.getAdminPosts = async (req, res) => {
   try {
     const where = {};
     if (category_id) where.category_id = parseInt(category_id);
-    if (status === 'active') where.deleted_at = null;
-    else if (status === 'hidden') where.deleted_at = { not: null };
+    
+    // ✅ UPDATED: "active" means NOT deleted AND NOT auto-hidden
+    if (status === 'active') {
+      where.deleted_at = null;
+      where.is_hidden = false; 
+    } 
+    // ✅ UPDATED: "hidden" means EITHER soft-deleted OR auto-hidden by reports
+    else if (status === 'hidden') {
+      where.OR = [
+        { deleted_at: { not: null } },
+        { is_hidden: true }
+      ];
+    }
 
     if (search) {
       where.OR = [
@@ -562,7 +761,7 @@ exports.getAdminPosts = async (req, res) => {
       where,
       include: {
         users: { select: { id: true, username: true, name: true, profile_picture: true, is_banned: true } },
-        forum_categories: { select: { name: true } },
+        forum_categories: { select: { name: true, translations: true } },
         _count: { select: { forum_comments: true } },
       },
       orderBy: { created_at: "desc" },
@@ -676,7 +875,7 @@ exports.getAdminPostById = async (req, res) => {
       where: { post_id: postId },
       include: {
         users: { select: { id: true, username: true, name: true, profile_picture: true, is_banned: true } },
-        forum_categories: true,
+        forum_categories: { select: { name: true, translations: true } },
       },
     });
 
@@ -688,7 +887,7 @@ exports.getAdminPostById = async (req, res) => {
     const comments = await prisma.forum_comments.findMany({
       where: { post_id: postId },
       include: {
-        users: { select: { id: true, username: true, name: true, profile_picture: true } },
+        users: { select: { id: true, username: true, name: true, profile_picture: true, roles: { select: { role_name: true } } } },
       },
       orderBy: { created_at: "asc" },
     });
@@ -707,7 +906,8 @@ exports.getAdminPostById = async (req, res) => {
     const formattedComments = comments.map(c => ({
       ...c,
       report_count: reportMap[c.comment_id] || 0,
-      status: c.deleted_at ? "hidden" : "active",
+      // ✅ UPDATED: Mark as hidden if it's deleted OR auto-hidden
+      status: (c.deleted_at || c.is_hidden) ? "hidden" : "active", 
     }));
 
     res.json({ success: true, data: { post, comments: formattedComments } });
@@ -765,14 +965,140 @@ exports.deleteCommentPermanently = async (req, res) => {
   }
 };
 
+// ============================================================
+// ADMIN: REPORT RESOLUTION
+// ============================================================
 
+exports.resolveReport = async (req, res) => {
+  const { report_id, action } = req.body; // action: "dismiss" or "delete_and_strike"
+
+  if (!report_id || !action) {
+    return res.status(400).json({ success: false, message: "report_id and action are required" });
+  }
+
+  try {
+    const report = await prisma.reports.findUnique({
+      where: { report_id: parseInt(report_id) }
+    });
+
+    if (!report || report.status !== "pending") {
+      return res.status(404).json({ success: false, message: "Report not found or already resolved" });
+    }
+
+    const contentType = report.content_type;
+    const contentId = report.content_id;
+
+    await prisma.$transaction(async (tx) => {
+      // 1. Mark this specific report as resolved
+      await tx.reports.update({
+        where: { report_id: parseInt(report_id) },
+        data: { status: "resolved" }
+      });
+
+      if (action === "dismiss") {
+        // ✅ DISMISS: Unhide the content and clear ALL pending reports for this content
+        if (contentType === "forum_post") {
+          await tx.forum_posts.update({ where: { post_id: contentId }, data: { is_hidden: false } });
+        } else if (contentType === "forum_comment") {
+          await tx.forum_comments.update({ where: { comment_id: contentId }, data: { is_hidden: false } });
+        }
+        
+        // Clear other pending reports for this same content to reset the counter
+        await tx.reports.updateMany({
+          where: { content_type: contentType, content_id: contentId, status: "pending" },
+          data: { status: "dismissed" }
+        });
+
+      } else if (action === "delete_and_strike") {
+        // ✅ DELETE & STRIKE: Soft delete the content, unhide it, and strike the author
+        
+        // A. Find the author to add a strike
+        let authorId = null;
+        if (contentType === "forum_post") {
+          const post = await tx.forum_posts.findUnique({ where: { post_id: contentId }, select: { user_id: true } });
+          authorId = post?.user_id;
+          await tx.forum_posts.update({ where: { post_id: contentId }, data: { deleted_at: new Date(), is_hidden: false } });
+        } else if (contentType === "forum_comment") {
+          const comment = await tx.forum_comments.findUnique({ where: { comment_id: contentId }, select: { user_id: true } });
+          authorId = comment?.user_id;
+          await tx.forum_comments.update({ where: { comment_id: contentId }, data: { deleted_at: new Date(), is_hidden: false } });
+        }
+
+        // B. Add +1 strike to the author
+        if (authorId) {
+          await tx.users.update({
+            where: { id: authorId },
+            data: { strike_count: { increment: 1 } }
+          });
+        }
+
+        // C. Clear other pending reports for this same content
+        await tx.reports.updateMany({
+          where: { content_type: contentType, content_id: contentId, status: "pending" },
+          data: { status: "resolved" }
+        });
+      }
+    });
+
+    res.json({ success: true, message: `Report ${action === 'dismiss' ? 'dismissed' : 'resolved with strike'} successfully` });
+  } catch (error) {
+    console.error("resolveReport error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+// ── Admin: Get all pending reports with content details ──
+exports.getPendingReports = async (req, res) => {
+  try {
+    const reports = await prisma.reports.findMany({
+      where: { status: "pending" },
+      include: {
+        users: { select: { id: true, username: true, name: true } }, // The reporter
+      },
+      orderBy: { created_at: "desc" }
+    });
+
+    // Enrich each report with the actual content (post or comment) and its author
+    const enrichedReports = await Promise.all(reports.map(async (report) => {
+      let content = null;
+      let author = null;
+      
+      if (report.content_type === "forum_post") {
+        const post = await prisma.forum_posts.findUnique({
+          where: { post_id: report.content_id },
+          include: { 
+            users: { select: { id: true, username: true, name: true, strike_count: true, is_banned: true } }, 
+            forum_categories: { select: { name: true } } 
+          }
+        });
+        content = post;
+        author = post?.users;
+      } else if (report.content_type === "forum_comment") {
+        const comment = await prisma.forum_comments.findUnique({
+          where: { comment_id: report.content_id },
+          include: { 
+            users: { select: { id: true, username: true, name: true, strike_count: true, is_banned: true } } 
+          }
+        });
+        content = comment;
+        author = comment?.users;
+      }
+
+      return { ...report, content, author };
+    }));
+
+    res.json({ success: true, data: enrichedReports });
+  } catch (error) {
+    console.error("getPendingReports error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 
 // ============================================================
 // ADMIN: CATEGORY MANAGEMENT
 // ============================================================
 
-// ✅ Helper to force clean, lowercase translation keys
+// ✅ Helper to force clean, lowercase translation keys DYNAMICALLY
 const normalizeTranslations = (translations) => {
   if (!translations) return null;
   let parsed = translations;
@@ -781,12 +1107,15 @@ const normalizeTranslations = (translations) => {
   }
   if (!parsed || typeof parsed !== 'object') return null;
 
-  // This guarantees ONLY lowercase keys are saved, merging old uppercase ones if they exist
-  return {
-    en: parsed.en || parsed.EN || "",
-    ar: parsed.ar || parsed.AR || "",
-    fr: parsed.fr || parsed.FR || ""
-  };
+  // Dynamically convert ALL keys to lowercase, preserving ANY language (en, ar, fr, es, etc.)
+  const cleanTranslations = {};
+  for (const key in parsed) {
+    if (Object.prototype.hasOwnProperty.call(parsed, key)) {
+      cleanTranslations[key.toLowerCase()] = parsed[key];
+    }
+  }
+  
+  return cleanTranslations;
 };
 
 exports.getCategories = async (req, res) => {
@@ -804,21 +1133,24 @@ exports.getCategories = async (req, res) => {
 
     const formattedCategories = categories.map(cat => {
       let parsed = cat.translations;
+      
+      // Safely parse the JSON string from the database
       if (typeof parsed === 'string') {
-        try { parsed = JSON.parse(parsed); } catch (e) { parsed = {}; }
+        try { 
+          parsed = JSON.parse(parsed); 
+        } catch (e) { 
+          parsed = {}; 
+        }
       }
-      if (!parsed || typeof parsed !== 'object') parsed = {};
-
-      // ✅ Force clean lowercase keys for the frontend, so it NEVER shows empty
-      const cleanTranslations = {
-        en: parsed.en || parsed.EN || "",
-        ar: parsed.ar || parsed.AR || "",
-        fr: parsed.fr || parsed.FR || ""
-      };
+      
+      // If it's not a valid object, default to an empty object
+      if (!parsed || typeof parsed !== 'object') {
+        parsed = {};
+      }
 
       return {
         ...cat,
-        translations: cleanTranslations,
+        translations: parsed, // ✅ DYNAMIC: Sends the ENTIRE translation object (en, ar, fr, es, etc.)
         post_count: cat._count.forum_posts
       };
     });

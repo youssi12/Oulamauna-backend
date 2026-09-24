@@ -11,12 +11,13 @@ const {
   uploadScholarImage: uploadScholarImageMiddleware,
 } = require("../config/cloudinary");
 
-router.use(protect);
-
+// ✅ Apply protection and contribution check directly to the route
 router.post(
   "/",
-  uploadScholarImageMiddleware.single("image"),
-  uploadScholarImage
+  protect,                        // 1. Ensure the user is logged in
+  protect.checkContributionAccess, // 2. Ensure they have permission to contribute (not banned/revoked)
+  uploadScholarImageMiddleware.single("image"), // 3. Upload the file to Cloudinary
+  uploadScholarImage              // 4. Save the data to the database
 );
 
 module.exports = router;

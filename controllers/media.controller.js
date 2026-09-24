@@ -71,111 +71,85 @@ const uploadMedia = async (req, res) => {
 // ======================================================
 // Approve Media
 // ======================================================
-
 const approveMedia = async (req, res) => {
   const mediaId = parseInt(req.params.id);
 
   try {
+    // ✅ 1. Added include to get scholar_id and language code
     const media = await prisma.media.findUnique({
-      where: {
-        media_id: mediaId,
-      },
+      where: { media_id: mediaId },
+      include: {
+        scholar_versions: {
+          select: {
+            scholar_id: true,
+            languages: { select: { code: true } }
+          }
+        }
+      }
     });
 
     if (!media) {
-      return res.status(404).json({
-        success: false,
-        message: "Media not found",
-      });
+      return res.status(404).json({ success: false, message: "Media not found" });
     }
 
     if (media.status !== "pending") {
-      return res.status(400).json({
-        success: false,
-        message: "Media is not pending",
-      });
+      return res.status(400).json({ success: false, message: "Media is not pending" });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-
-      // -----------------------------------------
-      // If this is an edited revision, supersede
-      // the original media.
-      // -----------------------------------------
-
       if (media.previous_media_id) {
+        // ✅ الجديد: نقل سجلات الإعجاب الفعلية من النسخة القديمة إلى الجديدة
+        await tx.media_likes.updateMany({
+          where: { media_id: media.previous_media_id },
+          data: { media_id: mediaId },
+        });
+
+        // تحديث حالة النسخة القديمة إلى "ملغاة/مستبدلة"
         await tx.media.update({
-          where: {
-            media_id: media.previous_media_id,
-          },
+          where: { media_id: media.previous_media_id },
+          data: { status: "superseded" },
+        });
+      }
+
+      // اعتماد النسخة الجديدة
+      return tx.media.update({
+        where: { media_id: mediaId },
+        data: { status: "approved" },
+      });
+    });
+
+    // ✅ 2. Updated Notification to include scholar_id and lang
+    if (media.uploaded_by) {
+      const targetUser = await prisma.users.findUnique({
+        where: { id: media.uploaded_by },
+        select: { notifications_enabled: true }
+      });
+
+      if (targetUser && targetUser.notifications_enabled === true) {
+        const scholarId = media.scholar_versions?.scholar_id;
+        const langCode = media.scholar_versions?.languages?.code || 'en';
+        const mediaName = media.title || media.file_name || "media";
+
+        await prisma.notifications.create({
           data: {
-            status: "superseded",
+            user_id: media.uploaded_by,
+            type: "MEDIA_APPROVED",
+            message: `Your media "${mediaName}" has been approved.`,
+            related_entity: `scholar:${scholarId},media:${mediaId},lang:${langCode}`, // ✅ FIXED
+            is_read: false,
+            created_at: new Date(),
           },
         });
       }
 
-      // -----------------------------------------
-      // Approve the new revision
-      // -----------------------------------------
-
-      return tx.media.update({
-        where: {
-          media_id: mediaId,
-        },
-        data: {
-          status: "approved",
-        },
-      });
-    });
-
-    // -----------------------------------------
-    // Notification & Auto-Promotion
-    // -----------------------------------------
-
-    if (media.uploaded_by) {
-      const mediaName =
-        media.title ||
-        media.file_name ||
-        "media";
-
-            // ✅ PASTE THIS EXACT BLOCK:
-        // ⭐ Check if user has notifications enabled before sending
-        const targetUser = await prisma.users.findUnique({
-          where: { id: media.uploaded_by },
-          select: { notifications_enabled: true }
-        });
-
-        if (targetUser && targetUser.notifications_enabled === true) {
-          await prisma.notifications.create({
-            data: {
-              user_id: media.uploaded_by,
-              type: "MEDIA_APPROVED",
-              message: `Your media "${mediaName}" has been approved.`,
-              related_entity: `media:${mediaId}`,
-              is_read: false,
-              created_at: new Date(),
-            },
-          });
-        }
-
-      // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
-      // This checks if they are a basic "user" and upgrades them automatically!
       await promoteUserToContributor(media.uploaded_by);
     }
 
-    return res.json({
-      success: true,
-      message: "Media approved",
-      data: updated,
-    });
+    return res.json({ success: true, message: "Media approved", data: updated });
 
   } catch (error) {
     console.error("approveMedia error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -699,6 +673,75 @@ const registerMediaView = async (req, res) => {
   }
 };
 
+// ======================================================
+// Get All Media Summary (for Admin "All Media" page)
+// ======================================================
+// ======================================================
+// Get All Media Summary (for Admin "All Media" page)
+// ======================================================
+const getAllMediaSummary = async (req, res) => {
+  try {
+    const mediaItems = await prisma.media.findMany({
+      select: {
+        media_id: true,
+        title: true,
+        year: true,                // ✅ ADDED
+        description: true,         // ✅ ADDED
+        file_type: true,
+        status: true,
+        uploaded_at: true,
+        media_url: true,
+        file_path: true,
+        file_name: true,
+        source_type: true,
+        view_count: true,          // ✅ ADDED
+        like_count: true,          // ✅ ADDED
+        uploaded_by: true,         // ✅ ADDED
+        users: {                   // ✅ ADDED: Uploader details
+          select: {
+            id: true,
+            username: true,
+            name: true
+          }
+        },
+        scholar_versions: {
+          select: { 
+            scholar_id: true, 
+            canonical_name: true, 
+            languages: { select: { code: true } } 
+          }
+        }
+      },
+      orderBy: { uploaded_at: "desc" } // ✅ ORDERED BY TIME
+    });
+
+    const transformed = mediaItems.map(item => ({
+      mediaId: item.media_id.toString(),
+      title: item.title || "Untitled",
+      year: item.year,               // ✅ ADDED
+      description: item.description, // ✅ ADDED
+      fileType: item.file_type,
+      status: item.status,
+      uploadedAt: item.uploaded_at,  // ✅ ADDED
+      mediaUrl: item.media_url || null,
+      filePath: item.file_path || null,
+      fileName: item.file_name || null,
+      sourceType: item.source_type || null,
+      viewCount: item.view_count,    // ✅ ADDED
+      likeCount: item.like_count,    // ✅ ADDED
+      uploadedBy: item.uploaded_by,  // ✅ ADDED
+      uploader: item.users ? { id: item.users.id, username: item.users.username, name: item.users.name } : null, // ✅ ADDED
+      scholarName: item.scholar_versions?.canonical_name || "Unknown Scholar",
+      scholarId: item.scholar_versions?.scholar_id,
+      languageCode: item.scholar_versions?.languages?.code || "unknown"
+    }));
+
+    res.json({ success: true, data: transformed });
+  } catch (error) {
+    console.error("getAllMediaSummary error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
 module.exports = {
   uploadMedia,
@@ -709,6 +752,6 @@ module.exports = {
   getScholarMedia,
   updateMedia,
   toggleMediaLike,
-  registerMediaView
-  
+  registerMediaView,
+  getAllMediaSummary
 };

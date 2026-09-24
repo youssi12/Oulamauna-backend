@@ -59,71 +59,93 @@ async function getFeaturedScholars(lang = 'EN') {
     where: { code: lang },
     select: { language_id: true },
   });
-  const languageId = langRecord?.language_id || 1;
+  const requestedLangId = langRecord?.language_id || 1;
 
-  const rows = await prisma.scholar_versions.findMany({
-    where: {
-      status: APPROVED,
-      language_id: languageId
-    },
-    orderBy: { version_id: "asc" },
-    take: 4,
+  const scholars = await prisma.scholars.findMany({
+    where: { is_featured: true },
     include: {
-      regions: true,
-      scholar_disciplines: {
-        take: 1,
-        orderBy: { discipline_id: "asc" },
-        include: { disciplines: true },
+      scholar_versions: {
+        where: { status: "approved" }, // ✅ REMOVED language_id filter to allow fallback
+        include: {
+          languages: true,
+          regions: true,
+          scholar_dates: { where: { date_type: "birth" }, take: 1 },
+          scholar_disciplines: { take: 1, orderBy: { discipline_id: "asc" }, include: { disciplines: true } },
+        },
       },
     },
-  });
-
-  return rows.map((s) => ({
-    scholar_id: s.scholar_id,
-    version_id: s.version_id,
-    canonical_name: s.canonical_name,
-    century_gregorian_start: s.century_gregorian_start,
-    century_gregorian_end: s.century_gregorian_end,
-    region_name: s.regions?.name ?? null,
-    discipline_name: s.scholar_disciplines[0]?.disciplines?.name ?? null,
-    image_url: s.image_url,
-    biography: s.biography,
-  }));
-}
-
-async function getRecentScholars() {
-  const recentVersions = await prisma.scholar_versions.findMany({
-    where: {
-      status: 'approved',
-    },
-    orderBy: {
-      created_at: 'desc',
-    },
+    orderBy: { created_at: "desc" },
     take: 4,
-    select: {
-      version_id: true,
-      scholar_id: true,
-      canonical_name: true,
-      century_gregorian_start: true,
-      image_url: true,
-      created_at: true,
-      languages: {
-        select: {
-          code: true,
-        }
-      }
-    },
   });
 
-  return recentVersions.map((version) => ({
-    scholar_id: version.scholar_id,
-    version_id: version.version_id,
-    canonical_name: version.canonical_name,
-    century_gregorian_start: version.century_gregorian_start,
-    image_url: version.image_url,
-    created_at: version.created_at,
-    language_code: version.languages?.code || 'EN',
-  }));
+  return scholars
+    .filter(s => s.scholar_versions.length > 0)
+    .map(scholar => {
+      // 1. Try to find the requested language first
+      let version = scholar.scholar_versions.find(v => v.language_id === requestedLangId);
+      let isFallback = false;
+
+      // 2. If not found, fallback to the FIRST available approved language
+      if (!version) {
+        version = scholar.scholar_versions[0];
+        isFallback = true;
+      }
+
+      return {
+        scholar_id: scholar.scholar_id,
+        version_id: version.version_id,
+        canonical_name: version.canonical_name,
+        century_gregorian_start: version.century_gregorian_start,
+        century_gregorian_end: version.century_gregorian_end,
+        region_name: version.regions?.name || null,
+        discipline_name: version.scholar_disciplines[0]?.disciplines?.name || null,
+        image_url: version.image_url,
+        biography: version.biography,
+        language_code: version.languages?.code || lang,
+        isFallback: isFallback, // ✅ Tells frontend to show a warning
+      };
+    });
+}
+async function getRecentScholars(lang = 'EN') {
+  const langRecord = await prisma.languages.findFirst({
+    where: { code: lang },
+    select: { language_id: true },
+  });
+  const requestedLangId = langRecord?.language_id || 1;
+
+  const scholars = await prisma.scholars.findMany({
+    include: {
+      scholar_versions: {
+        where: { status: "approved" },
+        include: { languages: true },
+      },
+    },
+    orderBy: { created_at: "desc" },
+    take: 4,
+  });
+
+  return scholars
+    .filter(s => s.scholar_versions.length > 0)
+    .map(scholar => {
+      let version = scholar.scholar_versions.find(v => v.language_id === requestedLangId);
+      let isFallback = false;
+
+      if (!version) {
+        version = scholar.scholar_versions[0];
+        isFallback = true;
+      }
+
+      return {
+        scholar_id: scholar.scholar_id,
+        version_id: version.version_id,
+        canonical_name: version.canonical_name,
+        century_gregorian_start: version.century_gregorian_start,
+        image_url: version.image_url,
+        created_at: scholar.created_at,
+        language_code: version.languages?.code || lang,
+        isFallback: isFallback,
+      };
+    });
 }
 
 async function getDisciplines(lang = 'EN') {
@@ -131,13 +153,14 @@ async function getDisciplines(lang = 'EN') {
     where: { code: lang },
     select: { language_id: true },
   });
-
   const languageId = langRecord?.language_id || 1;
 
   const rows = await prisma.$queryRaw`
     SELECT
       d.discipline_id AS discipline_id,
-      d.name AS name,
+      d.name AS default_name,
+      d.translations AS translations,
+      d.image_url AS image_url,
       COUNT(DISTINCT sv.scholar_id) AS count
     FROM disciplines d
     LEFT JOIN scholar_disciplines sd ON sd.discipline_id = d.discipline_id
@@ -145,16 +168,33 @@ async function getDisciplines(lang = 'EN') {
       ON sv.version_id = sd.version_id 
       AND sv.status = ${APPROVED}
       AND sv.language_id = ${languageId}
-    GROUP BY d.discipline_id, d.name
+    GROUP BY d.discipline_id, d.name, d.translations, d.image_url
+    HAVING count > 0
     ORDER BY count DESC
-    LIMIT 6
   `;
 
-  return rows.map((d) => ({
-    discipline_id: Number(d.discipline_id),
-    name: d.name,
-    count: Number(d.count),
-  }));
+  return rows.map((d) => {
+    let displayName = d.default_name; // Fallback to default name
+
+    if (d.translations) {
+      try {
+        // Parse the JSON string returned by MySQL
+        const trans = typeof d.translations === 'string' ? JSON.parse(d.translations) : d.translations;
+        
+        // ✅ Bulletproof fallback: checks exact match, uppercase, lowercase, then English, then default
+        displayName = trans[lang] || trans[lang.toUpperCase()] || trans[lang.toLowerCase()] || trans['EN'] || trans['en'] || d.default_name;
+      } catch (e) {
+        console.error("Error parsing translations JSON for discipline:", d.discipline_id, e);
+      }
+    }
+
+    return {
+      discipline_id: Number(d.discipline_id), // ✅ Safely converts BigInt to Number
+      name: displayName,                      // ✅ Returns the translated name!
+      image_url: d.image_url || null,
+      count: Number(d.count),                 // ✅ Safely converts BigInt to Number
+    };
+  });
 }
 
 async function getEras(lang = "EN") {
@@ -228,13 +268,18 @@ async function getEras(lang = "EN") {
 }
 async function getFeaturedWorks() {
   const rows = await prisma.scholar_works.findMany({
-    where: { status: APPROVED },
+    where: { 
+      status: APPROVED,
+      is_featured: true, 
+    },
     orderBy: { work_id: "desc" },
-    take: 3,
+    take: 4, 
     include: {
+      // ✅ For singular relations, we ONLY use 'select', no 'where' or 'take'
       scholar_versions: {
         select: {
           scholar_id: true,
+          canonical_name: true, 
           languages: {
             select: { code: true }
           }
@@ -243,16 +288,22 @@ async function getFeaturedWorks() {
     }
   });
 
-  return rows.map((w) => ({
-    work_id: w.work_id,
-    scholar_id: w.scholar_versions?.scholar_id || null,
-    work_lang: w.scholar_versions?.languages?.code || "EN",
-    title: w.title,
-    year: w.year,
-    format: w.format,
-    media_url: w.media_url,
-    description: w.description,
-  }));
+  return rows.map((w) => {
+    // ✅ w.scholar_versions is a single object, not an array!
+    const version = w.scholar_versions; 
+    
+    return {
+      work_id: w.work_id,
+      scholar_id: version?.scholar_id || null,
+      scholar_name: version?.canonical_name || null, 
+      work_lang: version?.languages?.code || "EN",
+      title: w.title,
+      year: w.year,
+      format: w.format,
+      media_url: w.media_url,
+      description: w.description,
+    };
+  });
 }
 
 async function getStats(lang = 'EN') {
@@ -293,7 +344,55 @@ async function getStats(lang = 'EN') {
 
   return { scholars, manuscripts, disciplines, centuries };
 }
+async function getPopularForumPosts() {
+  const posts = await prisma.forum_posts.findMany({
+    where: {
+      deleted_at: null,
+      is_hidden: false, // ✅ Only show visible, non-deleted posts
+    },
+    orderBy: {
+      like_count: 'desc', // ✅ Sort by most likes first
+    },
+    take: 4, // ✅ Top 4 popular posts
+    include: {
+      users: {
+        select: { 
+          id: true, 
+          username: true, 
+          name: true, 
+          profile_picture: true 
+        }
+      },
+      forum_categories: {
+        select: { 
+          category_id: true, 
+          name: true 
+        }
+      },
+      _count: {
+        select: { 
+          forum_comments: true // ✅ Get the comment count
+        }
+      }
+    }
+  });
 
+  return posts.map(post => ({
+    post_id: post.post_id,
+    title: post.title,
+    excerpt: post.content.length > 120 ? post.content.substring(0, 120) + '...' : post.content,
+    like_count: post.like_count || 0,
+    comment_count: post._count.forum_comments || 0,
+    author: {
+      id: post.users?.id,
+      username: post.users?.username,
+      name: post.users?.name,
+      profile_picture: post.users?.profile_picture
+    },
+    category: post.forum_categories,
+    created_at: post.created_at
+  }));
+}
 /* ------------------------------------------------------------------ */
 /*  Controller                                                         */
 /* ------------------------------------------------------------------ */
@@ -308,6 +407,7 @@ exports.getHomeData = async (req, res) => {
       eras,
       featuredWorks,
       stats,
+      popularForumPosts, // ✅ ADD THIS
     ] = await Promise.all([
       getFeaturedScholars(lang),
       getRecentScholars(lang),
@@ -315,6 +415,7 @@ exports.getHomeData = async (req, res) => {
       getEras(lang),
       getFeaturedWorks(),
       getStats(lang),
+      getPopularForumPosts(), // ✅ ADD THIS
     ]);
 
     return res.status(200).json({
@@ -326,6 +427,7 @@ exports.getHomeData = async (req, res) => {
         eras,
         featuredWorks,
         stats,
+        popularForumPosts, // ✅ ADD THIS
       },
     });
   } catch (err) {

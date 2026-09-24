@@ -1,94 +1,52 @@
 const prisma = require("../config/db");
 
-const DEFAULT_LANGUAGE_ID = 1; // 'ar' — Arabic
-
 // ===================================================
-// Create discipline (language-dependent)
+// Create discipline (Dynamic JSON translations)
 // ===================================================
+exports.createDiscipline = async (req, res) => {
+  const { translations, image_url } = req.body;
+  const userId = req.user.id;
 
- exports.createDiscipline = async (req, res) => {
-  const name = req.body.name?.trim();
-  const language_id = req.body.language_id
-    ? parseInt(req.body.language_id, 10)
-    : DEFAULT_LANGUAGE_ID;
-
-  if (Number.isNaN(language_id)) {
+  if (!translations || typeof translations !== "object" || Object.keys(translations).length === 0) {
     return res.status(400).json({
       success: false,
-      message: "language_id must be a valid number",
-    });
-  }
-
-  if (!name) {
-    return res.status(400).json({
-      success: false,
-      message: "name is required",
+      message: "Valid translations object is required",
     });
   }
 
   try {
-    const language = await prisma.languages.findUnique({
-      where: { language_id },
-    });
-
-    if (!language) {
-      return res.status(400).json({
-        success: false,
-        message: `Unknown language_id "${language_id}"`,
-      });
-    }
-
-    const existing = await prisma.disciplines.findFirst({
-      where: {
-        name,
-        language_id,
-      },
-    });
-
-    if (existing) {
-      return res.status(409).json({
-        success: false,
-        message: "Discipline already exists",
-      });
-    }
-
     const discipline = await prisma.$transaction(async (tx) => {
-      const discipline = await tx.disciplines.create({
+      // ✅ THIS IS THE FIX: It takes the first language you filled in and uses it as 'name'.
+      const fallbackName = translations.en || Object.values(translations)[0] || "Unnamed Discipline";
+
+      const newDiscipline = await tx.disciplines.create({
         data: {
-          name,
-          language_id,
+          name: fallbackName,          // ✅ This satisfies Prisma's requirement
+          translations: translations,
+          image_url: image_url ? image_url.trim() : null,
           created_at: new Date(),
         },
       });
 
       const admins = await tx.users.findMany({
-        where: {
-          roles: {
-            role_name: "admin",
-          },
-        },
-        select: {
-          id: true,
-        },
+        where: { roles: { role_name: "admin" }, id: { not: userId } },
+        select: { id: true },
       });
 
-
-      
-      // ⭐ kima hadi matestha9sh front cause all teh info are from the backend side
       if (admins.length > 0) {
         await tx.notifications.createMany({
           data: admins.map((admin) => ({
             user_id: admin.id,
             type: "NEW_DISCIPLINE_SUBMISSION",
-            message: `New discipline added: "${discipline.name}"`,
-            related_entity: `discipline:${discipline.discipline_id}`,
+            message: `New discipline added: "${fallbackName}"`,
+            related_entity: `discipline:${newDiscipline.discipline_id}`,
             is_read: false,
             created_at: new Date(),
           })),
         });
       }
 
-      return discipline;
+      return newDiscipline;
     });
 
     return res.status(201).json({
@@ -97,122 +55,62 @@ const DEFAULT_LANGUAGE_ID = 1; // 'ar' — Arabic
       data: discipline,
     });
   } catch (error) {
-    console.error(error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    console.error("createDiscipline error:", error);
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 // ===================================================
-// Get all disciplines (filtered by language_id)
+// Get all disciplines (Dynamic: Frontend picks the right translation)
 // ===================================================
-
 exports.getAllDisciplines = async (req, res) => {
-  const langCode = req.query.lang; // e.g. "en", "ar", "fr" from frontend
-  let language_id = DEFAULT_LANGUAGE_ID;
-
   try {
-    // 1. If frontend sends ?lang=ar, find the correct language_id for "ar"
-    if (langCode) {
-      const language = await prisma.languages.findFirst({
-        where: { code: langCode },
-      });
-      if (language) language_id = language.language_id;
-    } 
-    // 2. Fallback: if someone sends ?language_id=3 directly
-    else if (req.query.language_id) {
-      const parsed = parseInt(req.query.language_id, 10);
-      if (!Number.isNaN(parsed)) language_id = parsed;
-    }
-
     const disciplines = await prisma.disciplines.findMany({
-      where: {
-        language_id,
-      },
-      orderBy: {
-        discipline_id: "asc",
-      },
+      orderBy: { discipline_id: "asc" },
     });
+
+    const formattedDisciplines = disciplines.map((d) => ({
+      ...d,
+      translations: typeof d.translations === "string" ? JSON.parse(d.translations) : d.translations,
+    }));
 
     res.json({
       success: true,
-      data: disciplines,
+      data: formattedDisciplines,
     });
   } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    console.error("getAllDisciplines error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
- 
 // ===================================================
-// Update discipline (scoped to language_id)
+// Update discipline (replaces the entire translations JSON)
 // ===================================================
-
 exports.updateDiscipline = async (req, res) => {
-   const id = Number(req.params.id);
+  const id = Number(req.params.id);
+  const { translations, image_url } = req.body;
 
-if (!Number.isInteger(id)) {
-  return res.status(400).json({
-    success: false,
-    message: "Invalid discipline id",
-  });
-}
-  const name = req.body.name?.trim();
+  if (!Number.isInteger(id)) {
+    return res.status(400).json({ success: false, message: "Invalid discipline id" });
+  }
 
- 
-  
-
-  if (!name) {
-    return res.status(400).json({
-      success: false,
-      message: "name is required",
-    });
+  if (!translations || typeof translations !== "object" || Object.keys(translations).length === 0) {
+    return res.status(400).json({ success: false, message: "Valid translations object is required" });
   }
 
   try {
-    const discipline = await prisma.disciplines.findUnique({
-      where: {
-        discipline_id: id,
-      },
-    });
+    const discipline = await prisma.disciplines.findUnique({ where: { discipline_id: id } });
 
     if (!discipline) {
-      return res.status(404).json({
-        success: false,
-        message: "Discipline not found",
-      });
+      return res.status(404).json({ success: false, message: "Discipline not found" });
     }
-     const existing = await prisma.disciplines.findFirst({
-  where: {
-    name,
-    language_id: discipline.language_id,
-    NOT: {
-      discipline_id: id,
-    },
-  },
-});
-
-if (existing) {
-  return res.status(409).json({
-    success: false,
-    message: "Discipline already exists",
-  });
-}
 
     const updated = await prisma.disciplines.update({
-      where: {
-        discipline_id: id,
-      },
-      data: {
-        name,
+      where: { discipline_id: id },
+      data: { 
+        translations: translations,
+        ...(image_url !== undefined ? { image_url: image_url.trim() || null } : {})
       },
     });
 
@@ -222,57 +120,35 @@ if (existing) {
       data: updated,
     });
   } catch (error) {
-    console.error(error);
-
-    res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    console.error("updateDiscipline error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
 // ===================================================
-// Delete discipline (scoped to language_id)
+// Delete discipline
 // ===================================================
+exports.deleteDiscipline = async (req, res) => {
+  const id = Number(req.params.id);
 
- exports.deleteDiscipline = async (req, res) => {
-   const id = Number(req.params.id);
-
-if (!Number.isInteger(id)) {
-  return res.status(400).json({
-    success: false,
-    message: "Invalid discipline id",
-  });
-}
+  if (!Number.isInteger(id)) {
+    return res.status(400).json({ success: false, message: "Invalid discipline id" });
+  }
 
   try {
-    const discipline = await prisma.disciplines.findUnique({
-      where: {
-        discipline_id: id,
-      },
-    });
+    const discipline = await prisma.disciplines.findUnique({ where: { discipline_id: id } });
 
     if (!discipline) {
-      return res.status(404).json({
-        success: false,
-        message: "Discipline not found",
-      });
+      return res.status(404).json({ success: false, message: "Discipline not found" });
     }
 
-    // scholar_disciplines has no onDelete: Cascade in your schema, so rows
-    // linking scholars to this discipline must be removed first or the
-    // delete will fail on the foreign key constraint.
     await prisma.$transaction(async (tx) => {
       await tx.scholar_disciplines.deleteMany({
-        where: {
-          discipline_id: id,
-        },
+        where: { discipline_id: id },
       });
 
       await tx.disciplines.delete({
-        where: {
-          discipline_id: id,
-        },
+        where: { discipline_id: id },
       });
     });
 
@@ -281,11 +157,36 @@ if (!Number.isInteger(id)) {
       message: "Discipline deleted successfully",
     });
   } catch (error) {
-    console.error(error);
+    console.error("deleteDiscipline error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
 
-    res.status(500).json({
-      success: false,
-      message: "Server error",
+// ===================================================
+// Upload Discipline Image
+// ===================================================
+exports.uploadDisciplineImage = async (req, res) => {
+  try {
+    const disciplineId = parseInt(req.params.id);
+    
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: "No image file provided" });
+    }
+
+    const imageUrl = req.file.path; 
+
+    const updated = await prisma.disciplines.update({
+      where: { discipline_id: disciplineId },
+      data: { image_url: imageUrl }
     });
+
+    res.json({
+      success: true,
+      message: "Discipline image uploaded successfully",
+      data: updated
+    });
+  } catch (error) {
+    console.error("uploadDisciplineImage error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };

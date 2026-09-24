@@ -1,14 +1,30 @@
 const prisma = require("../config/db");
 
- 
+ const ADMIN_ONLY_TYPES = [
+  "NEW_SCHOLAR_SUBMISSION",
+  "EDIT_PROPOSAL",
+  "REPORT_SUBMITTED",
+  "NEW_DISCIPLINE_SUBMISSION",
+  "NEW_REGION_SUBMISSION",
+  "NEW_FORUM_POST",
+];
 exports.getNotifications = async (req, res) => {
   const userId = req.user.id;
-  const { unread_only, page = 1, limit = 20 } = req.query;
+  const { unread_only, page = 1, limit = 20, scope } = req.query;
 
   try {
     const where = { user_id: userId };
     if (unread_only === "true") {
       where.is_read = false;
+    }
+
+    // scope=public  -> exclude admin-only types
+    // scope=admin   -> only admin-only types
+    // no scope      -> everything (kept for backward compatibility)
+    if (scope === "public") {
+      where.type = { notIn: ADMIN_ONLY_TYPES };
+    } else if (scope === "admin") {
+      where.type = { in: ADMIN_ONLY_TYPES };
     }
 
     const notifications = await prisma.notifications.findMany({
@@ -19,7 +35,7 @@ exports.getNotifications = async (req, res) => {
     });
 
     const unreadCount = await prisma.notifications.count({
-      where: { user_id: userId, is_read: false },
+      where: { ...where, is_read: false },
     });
 
     res.json({

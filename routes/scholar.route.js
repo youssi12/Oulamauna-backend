@@ -4,9 +4,11 @@ const router = express.Router();
 const scholarPage = require("../controllers/scholarPage.controller");
 const protect = require("../middlewares/auth.middleware");
 const { uploadScholarBundle } = require("../config/cloudinary");
-
+const searchController = require("../controllers/search.controller"); 
 // Create
 router.post("/", protect, uploadScholarBundle.any(), scholarPage.createScholar);
+//search
+router.get("/search", searchController.searchScholars);
 
 // Read
 router.get("/", scholarPage.getPublishedScholars);          
@@ -34,5 +36,6 @@ router.post("/relationships", protect, scholarPage.addScholarRelationship);
 // ✅ NEW: Dedicated routes for REJECTED versions (Must be ABOVE /:id)
 router.put("/rejected/:versionId", protect, scholarPage.updateRejectedVersion);
 router.delete("/rejected/:versionId", protect, scholarPage.deleteRejectedVersion);
+
 
 module.exports = router;

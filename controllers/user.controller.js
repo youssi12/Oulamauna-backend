@@ -1,4 +1,5 @@
 const prisma = require("../config/db");
+const bcrypt = require("bcryptjs");
 const { isAdminUser } = require("../service/role.service");
 const {uploadProfilePictureService} = require("../service/profilePicture.service");
 
@@ -14,6 +15,8 @@ exports.getAllUsers = async (req, res) => {
         profile_picture: true,       // ✅ ADDED (for avatar)
         contributorBadge: true,      // ✅ ADDED
         is_banned: true, 
+         is_active: true, 
+        strike_count: true,          
         created_at: true,
         allowed_to_contribute: true, 
         roles: {                     
@@ -32,6 +35,8 @@ exports.getAllUsers = async (req, res) => {
       contributorBadge: user.contributorBadge,
       role: user.roles?.role_name || "user", 
       is_banned: user.is_banned,
+      is_active: user.is_active, 
+      strike_count: user.strike_count,
       created_at: user.created_at,
       allowed_to_contribute: user.allowed_to_contribute
     }));
@@ -281,6 +286,65 @@ exports.updateMyProfile = async (req, res) => {
   } catch (error) {
     console.error("updateMyProfile error:", error);
     res.status(500).json({ success: false, message: error.message || "Server error" });
+  }
+};
+
+
+exports.updatePassword = async (req, res) => {
+  const userId = req.user.id;
+  const { currentPassword, newPassword, confirmNewPassword } = req.body;
+
+  // Case 1: Missing fields
+  if (!currentPassword || !newPassword || !confirmNewPassword) {
+    return res.status(400).json({ success: false, message: "All password fields are required" });
+  }
+
+  // Case 2: New password and confirmation do not match
+  if (newPassword !== confirmNewPassword) {
+    return res.status(400).json({ success: false, message: "New password and confirmation do not match" });
+  }
+
+  // Case 3: Password is too short
+  if (newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: "New password must be at least 6 characters long" });
+  }
+
+  // Case 4: New password is the same as the current password
+  if (currentPassword === newPassword) {
+    return res.status(400).json({ success: false, message: "New password cannot be the same as your current password" });
+  }
+
+  try {
+    const user = await prisma.users.findUnique({
+      where: { id: userId },
+      select: { password_hash: true }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+
+    // Case 5: Current password is incorrect
+    const isMatch = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!isMatch) {
+      // ✅ CRITICAL FIX: Use 400 (Bad Request) instead of 401 (Unauthorized).
+      // 401 triggers the frontend to log the user out. 400 just shows the error message.
+      return res.status(400).json({ success: false, message: "Current password is incorrect" }); 
+    }
+
+    // 6. Hash the new password and update
+    const salt = await bcrypt.genSalt(12);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+
+    await prisma.users.update({
+      where: { id: userId },
+      data: { password_hash: hashedPassword }
+    });
+
+    res.json({ success: true, message: "Password updated successfully" });
+  } catch (error) {
+    console.error("Update password error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
 

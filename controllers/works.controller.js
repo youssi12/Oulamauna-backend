@@ -67,68 +67,46 @@ exports.createWork = async (req, res) => {
 // ======================================================
 // Approve Work
 // ======================================================
-
- exports.approveWork = async (req, res) => {
+exports.approveWork = async (req, res) => {
   const workId = parseInt(req.params.id);
 
   try {
+    // ✅ 1. Added include to get scholar_id and language code
     const work = await prisma.scholar_works.findUnique({
-      where: {
-        work_id: workId,
-      },
+      where: { work_id: workId },
+      include: {
+        scholar_versions: {
+          select: {
+            scholar_id: true,
+            languages: { select: { code: true } }
+          }
+        }
+      }
     });
 
     if (!work) {
-      return res.status(404).json({
-        success: false,
-        message: "Work not found",
-      });
+      return res.status(404).json({ success: false, message: "Work not found" });
     }
 
     if (work.status !== "pending") {
-      return res.status(400).json({
-        success: false,
-        message: "Work is not pending",
-      });
+      return res.status(400).json({ success: false, message: "Work is not pending" });
     }
 
     const updated = await prisma.$transaction(async (tx) => {
-
-      // -----------------------------------------
-      // If this is a revision, supersede the old
-      // work.
-      // -----------------------------------------
-
       if (work.previous_work_id) {
         await tx.scholar_works.update({
-          where: {
-            work_id: work.previous_work_id,
-          },
-          data: {
-            status: "superseded",
-          },
+          where: { work_id: work.previous_work_id },
+          data: { status: "superseded" },
         });
       }
 
-      // -----------------------------------------
-      // Approve new revision
-      // -----------------------------------------
-
       return tx.scholar_works.update({
-        where: {
-          work_id: workId,
-        },
-        data: {
-          status: "approved",
-        },
+        where: { work_id: workId },
+        data: { status: "approved" },
       });
     });
 
-        // ✅ PASTE THIS EXACT BLOCK:
-    // -----------------------------------------
-    // Notification & Auto-Promotion (ONLY if notifications enabled)
-    // -----------------------------------------
-//⭐
+    // ✅ 2. Updated Notification to include scholar_id and lang
     if (work.created_by) {
       const targetUser = await prisma.users.findUnique({
         where: { id: work.created_by },
@@ -136,36 +114,29 @@ exports.createWork = async (req, res) => {
       });
 
       if (targetUser && targetUser.notifications_enabled === true) {
+        const scholarId = work.scholar_versions?.scholar_id;
+        const langCode = work.scholar_versions?.languages?.code || 'en';
+        
         await prisma.notifications.create({
           data: {
             user_id: work.created_by,
             type: "WORK_APPROVED",
             message: `Your work "${work.title}" has been approved.`,
-            related_entity: `work:${workId}`,
+            related_entity: `scholar:${scholarId},work:${workId},lang:${langCode}`, // ✅ FIXED
             is_read: false,
             created_at: new Date(),
           },
         });
       }
 
-      // ✅ AUTO-PROMOTE THE CREATOR TO CONTRIBUTOR
-      // This checks if they are a basic "user" and upgrades them automatically!
       await promoteUserToContributor(work.created_by);
     }
 
-    return res.json({
-      success: true,
-      message: "Work approved",
-      data: updated,
-    });
+    return res.json({ success: true, message: "Work approved", data: updated });
 
   } catch (error) {
     console.error("approveWork error:", error);
-
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
+    return res.status(500).json({ success: false, message: "Server error" });
   }
 };
 
@@ -502,5 +473,99 @@ exports.getScholarWorks = async (req, res) => {
       success: false,
       message: "Server error",
     });
+  }
+};
+
+// ======================================================
+// Toggle Featured Status for a Work (Admin only)
+// ======================================================
+exports.toggleWorkFeature = async (req, res) => {
+  const workId = parseInt(req.params.id);
+
+  try {
+    const work = await prisma.scholar_works.findUnique({
+      where: { work_id: workId }
+    });
+
+    if (!work) {
+      return res.status(404).json({ success: false, message: "Work not found" });
+    }
+
+    const updated = await prisma.scholar_works.update({
+      where: { work_id: workId },
+      data: { is_featured: !work.is_featured }
+    });
+
+    res.json({
+      success: true,
+      message: updated.is_featured ? "Work featured successfully" : "Work unfeatured",
+      is_featured: updated.is_featured
+    });
+  } catch (error) {
+    console.error("toggleWorkFeature error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+// ======================================================
+// Get All Works Summary (for Admin "All Works" page)
+// ======================================================
+exports.getAllWorksSummary = async (req, res) => {
+  try {
+    const works = await prisma.scholar_works.findMany({
+      select: {
+        work_id: true,
+        title: true,
+        year: true,
+        format: true,
+        description: true,       // ✅ ADDED: Full description
+        is_featured: true,
+        status: true,
+        media_url: true,
+        file_path: true,
+        file_name: true,
+        source_type: true,
+        created_by: true,        // ✅ ADDED: Uploader ID
+        users: {                 // ✅ ADDED: Uploader details
+          select: {
+            id: true,
+            username: true,
+            name: true
+          }
+        },
+        scholar_versions: {
+          select: { 
+            scholar_id: true, 
+            canonical_name: true, 
+            languages: { select: { code: true } } 
+          }
+        }
+      },
+      orderBy: { work_id: "desc" } // ✅ ORDERED BY TIME (Auto-increment ID)
+    });
+
+    const transformed = works.map(work => ({
+      workId: work.work_id.toString(),
+      title: work.title,
+      year: work.year,
+      format: work.format,
+      description: work.description, // ✅ ADDED
+      isFeatured: work.is_featured,
+      status: work.status,
+      mediaUrl: work.media_url || null,
+      filePath: work.file_path || null,
+      fileName: work.file_name || null,
+      sourceType: work.source_type || null,
+      createdBy: work.created_by,
+      uploader: work.users ? { id: work.users.id, username: work.users.username, name: work.users.name } : null, // ✅ ADDED
+      scholarName: work.scholar_versions?.canonical_name || "Unknown Scholar",
+      scholarId: work.scholar_versions?.scholar_id,
+      languageCode: work.scholar_versions?.languages?.code || "unknown"
+    }));
+
+    res.json({ success: true, data: transformed });
+  } catch (error) {
+    console.error("getAllWorksSummary error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
   }
 };
