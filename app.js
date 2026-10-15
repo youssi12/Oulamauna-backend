@@ -6,6 +6,7 @@ const cookieParser = require("cookie-parser");
 
 // APP
 const app = express();
+app.set("trust proxy", 1);
 
 
 // MIDDELEWARES 

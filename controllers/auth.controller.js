@@ -5,12 +5,15 @@ const crypto = require("crypto");
 const { sendVerificationEmail, sendResetPasswordEmail } = require("../service/email.service");
 require("dotenv").config();
 
+const isProd = process.env.NODE_ENV === "production";
+
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "strict",
+  secure: isProd,
+  sameSite: isProd ? "none" : "lax",
   maxAge: 24 * 60 * 60 * 1000,
 };
+
 const serializeUser = (user) => ({
    id: user.id,
    username: user.username,
