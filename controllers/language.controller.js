@@ -24,9 +24,9 @@ exports.getAllLanguages = async (req, res) => {
   }
 };
 
-exports.connectDiffrentLanguages = async (req,res)=>{
-  const  {acceptedVersionId,secondVersionId} = req.body;
+// exports.connectDiffrentLanguages = async (req,res)=>{
+//   const  {acceptedVersionId,secondVersionId} = req.body;
 
-  // how it will work the father id
+//   // how it will work the father id
 
-}
+// }

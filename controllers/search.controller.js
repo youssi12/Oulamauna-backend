@@ -40,7 +40,101 @@ async function findMatchingDisciplineIds(term) {
   return rows.map((r) => r.discipline_id);
 }
 
- async function findCorrectedSearchTerm(searchTerm, languageId = null) {
+ // =========================================================
+// Replace findCorrectedSearchTerm + searchScholars with this.
+// Keep your existing: prisma, Fuse, normalizeText,
+// findMatchingRegionIds, findMatchingDisciplineIds, globalSearch.
+// =========================================================
+
+// ---------- tuning knobs ----------
+const MAX_RESULTS = 10;        // max scholars returned for a normal (non-exact) match
+const RANKING_POOL = 500;      // candidates pulled (lightweight) for ranking before cutting
+const FUZZY_MAX_RESULTS = 5;   // max scholars returned from the fuzzy fallback
+const FUZZY_MARGIN = 0.1;      // keep fuzzy results within this score of the best one
+const FUZZY_STRONG_MATCH = 0.05; // if the best fuzzy score is this good, return ONLY it
+
+// Shared include so the response shape is defined in one place
+const SCHOLAR_INCLUDE = {
+  scholar_aliases: { select: { alias_name: true } },
+  languages: { select: { code: true } },
+  regions: { select: { name: true } },
+  scholar_disciplines: { include: { disciplines: { select: { name: true } } } },
+  scholar_works: {
+    where: { status: "approved" },
+    select: { work_id: true, title: true, year: true, format: true },
+  },
+  media: {
+    where: { status: "approved" },
+    select: { media_id: true, title: true, description: true, media_url: true, file_type: true },
+  },
+};
+
+// ---------------------------------------------------------
+// WHERE builder (same logic as before, hoisted so it can be reused)
+// ---------------------------------------------------------
+async function buildWhereConditions(term, languageId) {
+  const whereConditions = {
+    status: "approved",
+    scholar_id: { not: null },
+    ...(languageId ? { language_id: languageId } : {}),
+  };
+
+  if (term !== "") {
+    const [matchingRegionIds, matchingDisciplineIds] = await Promise.all([
+      findMatchingRegionIds(term),
+      findMatchingDisciplineIds(term),
+    ]);
+
+    whereConditions.OR = [
+      { canonical_name: { contains: term } },
+      { scholar_aliases: { some: { alias_name: { contains: term } } } },
+      { biography: { contains: term } },
+      ...(matchingRegionIds.length > 0 ? [{ region_id: { in: matchingRegionIds } }] : []),
+      ...(matchingDisciplineIds.length > 0
+        ? [{ scholar_disciplines: { some: { discipline_id: { in: matchingDisciplineIds } } } }]
+        : []),
+      { scholar_works: { some: { title: { contains: term } } } },
+      { media: { some: { title: { contains: term } } } },
+      { media: { some: { description: { contains: term } } } },
+    ];
+  }
+
+  return whereConditions;
+}
+
+// ---------------------------------------------------------
+// Ranking for normal (substring) results.
+// Higher = closer. >= 100 means exact name/alias match.
+// ---------------------------------------------------------
+function scoreByName(scholar, normalizedTerm) {
+  const names = [
+    scholar.canonical_name,
+    ...(scholar.scholar_aliases || []).map((a) => a.alias_name),
+  ]
+    .filter(Boolean)
+    .map(normalizeText);
+
+  let best = 20; // matched through a non-name field (bio, region, discipline, works, media)
+
+  for (const n of names) {
+    let score;
+    if (n === normalizedTerm) score = 100;                                      // exact
+    else if (n.startsWith(normalizedTerm)) score = 80;                          // name starts with term
+    else if (n.split(" ").some((w) => w.startsWith(normalizedTerm))) score = 70; // any word starts with term
+    else if (n.includes(normalizedTerm)) score = 60;                            // term appears inside
+    else continue;
+
+    score += normalizedTerm.length / n.length; // tie-breaker: closer length = closer match
+    if (score > best) best = score;
+  }
+
+  return best;
+}
+
+// ---------------------------------------------------------
+// Fuzzy fallback: returns closest scholars (version-level), best first.
+// ---------------------------------------------------------
+async function findFuzzyMatches(searchTerm, languageId = null) {
   const normalizedSearch = normalizeText(searchTerm);
 
   const candidates = await prisma.scholar_versions.findMany({
@@ -50,35 +144,27 @@ async function findMatchingDisciplineIds(term) {
       ...(languageId ? { language_id: languageId } : {}),
     },
     select: {
+      version_id: true,
       canonical_name: true,
       scholar_aliases: { select: { alias_name: true } },
     },
   });
 
-  const fuzzyCandidates = [];
-
-  for (const scholar of candidates) {
-    if (scholar.canonical_name) {
-      fuzzyCandidates.push({
-        text: scholar.canonical_name,
-        normalized: normalizeText(scholar.canonical_name),
-      });
+  // One searchable entry per name/alias, remembering which scholar version it belongs to
+  const entries = [];
+  for (const s of candidates) {
+    if (s.canonical_name) {
+      entries.push({ version_id: s.version_id, normalized: normalizeText(s.canonical_name) });
     }
-    for (const alias of scholar.scholar_aliases || []) {
-      if (alias.alias_name) {
-        fuzzyCandidates.push({
-          text: alias.alias_name,
-          normalized: normalizeText(alias.alias_name),
-        });
+    for (const a of s.scholar_aliases || []) {
+      if (a.alias_name) {
+        entries.push({ version_id: s.version_id, normalized: normalizeText(a.alias_name) });
       }
     }
   }
+  if (entries.length === 0) return [];
 
-  if (fuzzyCandidates.length === 0) {
-    return null;
-  }
-
-  const fuse = new Fuse(fuzzyCandidates, {
+  const fuse = new Fuse(entries, {
     keys: ["normalized"],
     threshold: 0.45,
     ignoreLocation: true,
@@ -86,19 +172,153 @@ async function findMatchingDisciplineIds(term) {
   });
 
   const results = fuse.search(normalizedSearch);
+  if (results.length === 0) return [];
 
-  if (results.length === 0) {
-    return null;
+  // A scholar can match via its name AND several aliases: keep only its best score
+  const bestByVersion = new Map();
+  for (const r of results) {
+    const prev = bestByVersion.get(r.item.version_id);
+    if (prev === undefined || r.score < prev) bestByVersion.set(r.item.version_id, r.score);
   }
 
-  const bestMatch = results[0];
+  const ranked = [...bestByVersion.entries()]
+    .map(([version_id, score]) => ({ version_id, score }))
+    .sort((a, b) => a.score - b.score);
 
-  if (bestMatch.score > 0.45) {
-    return null;
-  }
+  // One very strong match -> return only that one
+  if (ranked[0].score <= FUZZY_STRONG_MATCH) return [ranked[0]];
 
-  return bestMatch.item.text;
+  // Otherwise: the best match plus anything close to it, capped
+  const cutoff = ranked[0].score + FUZZY_MARGIN;
+  return ranked.filter((r) => r.score <= cutoff).slice(0, FUZZY_MAX_RESULTS);
 }
+
+// ---------------------------------------------------------
+// Fetch full records, preserving the ranked order
+// ---------------------------------------------------------
+async function fetchScholarsInOrder(versionIds) {
+  if (versionIds.length === 0) return [];
+
+  const rows = await prisma.scholar_versions.findMany({
+    where: { version_id: { in: versionIds } },
+    include: SCHOLAR_INCLUDE,
+  });
+
+  const byId = new Map(rows.map((r) => [r.version_id, r]));
+  return versionIds.map((id) => byId.get(id)).filter(Boolean);
+}
+
+// =========================================================
+// Controller
+// =========================================================
+exports.searchScholars = async (req, res) => {
+  try {
+    const { q, lang } = req.query;
+    const searchTerm = q ? String(q).trim() : "";
+    const normalizedTerm = normalizeText(searchTerm);
+
+    // 1. Resolve language
+    let languageId = null;
+    if (lang) {
+      const language = await prisma.languages.findFirst({
+        where: { code: String(lang).toLowerCase() },
+      });
+      if (language) languageId = language.language_id;
+    }
+
+    let orderedIds = [];
+    let matchType = "none"; // "browse" | "exact" | "partial" | "fuzzy" | "none"
+
+    if (searchTerm === "") {
+      // 2a. No query: plain alphabetical browse
+      const rows = await prisma.scholar_versions.findMany({
+        where: await buildWhereConditions("", languageId),
+        select: { version_id: true },
+        orderBy: { canonical_name: "asc" },
+        take: 50,
+      });
+      orderedIds = rows.map((r) => r.version_id);
+      matchType = "browse";
+    } else {
+      // 2b. Normal search: lightweight pull, rank in JS
+      const pool = await prisma.scholar_versions.findMany({
+        where: await buildWhereConditions(searchTerm, languageId),
+        select: {
+          version_id: true,
+          canonical_name: true,
+          scholar_aliases: { select: { alias_name: true } },
+        },
+        take: RANKING_POOL,
+      });
+
+      if (pool.length > 0) {
+        const ranked = pool
+          .map((s) => ({
+            version_id: s.version_id,
+            canonical_name: s.canonical_name || "",
+            score: scoreByName(s, normalizedTerm),
+          }))
+          .sort((a, b) => b.score - a.score || a.canonical_name.localeCompare(b.canonical_name));
+
+        const exact = ranked.filter((r) => r.score >= 100);
+
+        if (exact.length > 0) {
+          // Correct match found: return ONLY it
+          orderedIds = exact.map((r) => r.version_id);
+          matchType = "exact";
+        } else {
+          // Closest few, best first
+          orderedIds = ranked.slice(0, MAX_RESULTS).map((r) => r.version_id);
+          matchType = "partial";
+        }
+      } else {
+        // 3. Nothing found -> fuzzy fallback (closest few, best first)
+        const fuzzy = await findFuzzyMatches(searchTerm, languageId);
+        if (fuzzy.length > 0) {
+          orderedIds = fuzzy.map((f) => f.version_id);
+          matchType = "fuzzy";
+        }
+      }
+    }
+
+    // 4. Fetch full records in ranked order
+    const scholars = await fetchScholarsInOrder(orderedIds);
+
+    // 5. Format response
+    const formattedScholars = scholars.map((s) => ({
+      scholar_id: s.scholar_id,
+      version_id: s.version_id,
+      canonical_name: s.canonical_name,
+      aliases: s.scholar_aliases?.map((a) => a.alias_name).filter(Boolean) || [],
+      biography: s.biography
+        ? s.biography.substring(0, 150) + (s.biography.length > 150 ? "..." : "")
+        : null,
+      disciplines: s.scholar_disciplines?.map((sd) => sd.disciplines?.name).filter(Boolean) || [],
+      region: s.regions?.name ?? null,
+      lang: s.languages?.code ? String(s.languages.code).toUpperCase() : "EN",
+      image_url: s.image_url,
+      works: s.scholar_works || [],
+      media: s.media || [],
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        scholars: formattedScholars,
+        search: {
+          originalQuery: searchTerm,
+          // for fuzzy matches: the name of the top result, so the UI can say "Showing results for X"
+          correctedQuery: matchType === "fuzzy" ? scholars[0]?.canonical_name ?? null : null,
+          wasCorrected: matchType === "fuzzy",
+          matchType,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("searchScholars error:", error);
+    res.status(500).json({ success: false, message: "Search failed.", error: error.message });
+  }
+};
 
 
 exports.globalSearch = async (req, res) => {
@@ -213,429 +433,7 @@ exports.globalSearch = async (req, res) => {
 };
 
 
-exports.searchScholars = async (req, res) => {
-
-  try {
-
-    const { q, lang } = req.query;
-
-    const searchTerm = q
-      ? String(q).trim()
-      : "";
-
-    let actualSearchTerm = searchTerm;
-    let correctedSearchTerm = null;
-
-    // -----------------------------------------------------
-    // 1. Resolve language first
-    // -----------------------------------------------------
-
-    let languageId = null;
-
-    if (lang) {
-
-      const language = await prisma.languages.findFirst({
-        where: {
-          code: String(lang).toLowerCase()
-        }
-      });
-
-      if (language) {
-        languageId = language.language_id;
-      }
-    }
-
-
-    // -----------------------------------------------------
-    // 2. Build normal search conditions
-    // -----------------------------------------------------
-
-     const buildWhereConditions = async (term) => {
-
-  const whereConditions = {
-    status: "approved",
-    scholar_id: { not: null },
-
-    ...(languageId
-      ? { language_id: languageId }
-      : {})
-  };
-
-
-  if (term !== "") {
-
-    const [matchingRegionIds, matchingDisciplineIds] = await Promise.all([
-      findMatchingRegionIds(term),
-      findMatchingDisciplineIds(term),
-    ]);
-
-    whereConditions.OR = [
-
-      // Scholar name
-      {
-        canonical_name: {
-          contains: term
-        }
-      },
-
-      // Aliases
-      {
-        scholar_aliases: {
-          some: {
-            alias_name: {
-              contains: term
-            }
-          }
-        }
-      },
-
-      // Biography
-      {
-        biography: {
-          contains: term
-        }
-      },
-
-      // Region — matched via resolved IDs (name + translations)
-      ...(matchingRegionIds.length > 0
-        ? [{ region_id: { in: matchingRegionIds } }]
-        : []),
-
-      // Discipline — same idea
-      ...(matchingDisciplineIds.length > 0
-        ? [{ scholar_disciplines: { some: { discipline_id: { in: matchingDisciplineIds } } } }]
-        : []),
-
-      // Works
-      {
-        scholar_works: {
-          some: {
-            title: {
-              contains: term
-            }
-          }
-        }
-      },
-
-      // Media title
-      {
-        media: {
-          some: {
-            title: {
-              contains: term
-            }
-          }
-        }
-      },
-
-      // Media description
-      {
-        media: {
-          some: {
-            description: {
-              contains: term
-            }
-          }
-        }
-      }
-
-    ];
-  }
-
-  return whereConditions;
-};
-
-    // -----------------------------------------------------
-    // 3. First attempt = normal search
-    // -----------------------------------------------------
-
-    let whereConditions =
-       await  buildWhereConditions(actualSearchTerm);
-
-
-    let scholars = await prisma.scholar_versions.findMany({
-
-      where: whereConditions,
-
-      include: {
-
-        scholar_aliases: {
-          select: {
-            alias_name: true
-          }
-        },
-
-        languages: {
-          select: {
-            code: true
-          }
-        },
-
-        regions: {
-          select: {
-            name: true
-          }
-        },
-
-        scholar_disciplines: {
-          include: {
-            disciplines: {
-              select: {
-                name: true
-              }
-            }
-          }
-        },
-
-        scholar_works: {
-
-          where: {
-            status: "approved"
-          },
-
-          select: {
-            work_id: true,
-            title: true,
-            year: true,
-            format: true
-          }
-
-        },
-
-        media: {
-
-          where: {
-            status: "approved"
-          },
-
-          select: {
-            media_id: true,
-            title: true,
-            description: true,
-            media_url: true,
-            file_type: true
-          }
-
-        }
-
-      },
-
-      orderBy: {
-        canonical_name: "asc"
-      },
-
-      take: 50
-
-    });
-
-
-    // -----------------------------------------------------
-    // 4. If nothing found → fuzzy correction
-    // -----------------------------------------------------
-
-    if (
-      searchTerm !== "" &&
-      scholars.length === 0
-    ) {
-
-      correctedSearchTerm =
-        await findCorrectedSearchTerm(
-          searchTerm,
-          languageId
-        );
-
-
-      // We found a likely correction
-      if (
-        correctedSearchTerm &&
-        normalizeText(correctedSearchTerm) !==
-        normalizeText(searchTerm)
-      ) {
-
-        actualSearchTerm = correctedSearchTerm;
-
-        whereConditions =
-          await buildWhereConditions(actualSearchTerm);
-
-
-        // Search again using corrected term
-        scholars =
-          await prisma.scholar_versions.findMany({
-
-            where: whereConditions,
-
-            include: {
-
-              scholar_aliases: {
-                select: {
-                  alias_name: true
-                }
-              },
-
-              languages: {
-                select: {
-                  code: true
-                }
-              },
-
-              regions: {
-                select: {
-                  name: true
-                }
-              },
-
-              scholar_disciplines: {
-                include: {
-                  disciplines: {
-                    select: {
-                      name: true
-                    }
-                  }
-                }
-              },
-
-              scholar_works: {
-                where: {
-                  status: "approved"
-                },
-                select: {
-                  work_id: true,
-                  title: true,
-                  year: true,
-                  format: true
-                }
-              },
-
-              media: {
-                where: {
-                  status: "approved"
-                },
-                select: {
-                  media_id: true,
-                  title: true,
-                  description: true,
-                  media_url: true,
-                  file_type: true
-                }
-              }
-
-            },
-
-            orderBy: {
-              canonical_name: "asc"
-            },
-
-            take: 50
-
-          });
-
-      }
-
-    }
-
-
-    // -----------------------------------------------------
-    // 5. Format response
-    // -----------------------------------------------------
-
-    const formattedScholars = scholars.map((s) => {
-
-      return {
-
-        scholar_id: s.scholar_id,
-
-        version_id: s.version_id,
-
-        canonical_name: s.canonical_name,
-
-        aliases:
-          s.scholar_aliases
-            ?.map(a => a.alias_name)
-            .filter(Boolean) || [],
-
-        biography:
-          s.biography
-            ? s.biography.substring(0, 150) +
-              (s.biography.length > 150 ? "..." : "")
-            : null,
-
-        disciplines:
-          s.scholar_disciplines
-            ?.map(
-              sd => sd.disciplines?.name
-            )
-            .filter(Boolean) || [],
-
-        region:
-          s.regions?.name ?? null,
-
-        lang:
-          s.languages?.code
-            ? String(s.languages.code).toUpperCase()
-            : "EN",
-
-        image_url: s.image_url,
-
-        works: s.scholar_works || [],
-
-        media: s.media || []
-
-      };
-
-    });
-
-
-    // -----------------------------------------------------
-    // 6. Response
-    // -----------------------------------------------------
-
-    res.json({
-
-      success: true,
-
-      data: {
-
-        scholars: formattedScholars,
-
-        // Useful for frontend
-        search: {
-
-          originalQuery: searchTerm,
-
-          correctedQuery: correctedSearchTerm,
-
-          wasCorrected:
-            Boolean(correctedSearchTerm)
-
-        }
-
-      }
-
-    });
-
-
-  } catch (error) {
-
-    console.error(
-      "searchScholars error:",
-      error
-    );
-
-    res.status(500).json({
-
-      success: false,
-
-      message: "Search failed.",
-
-      error: error.message
-
-    });
-
-  }
-
-};
-
-
+ 
 
 
 
