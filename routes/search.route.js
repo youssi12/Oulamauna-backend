@@ -7,5 +7,6 @@ const optionalAuth = require("../middlewares/optionalAuth.middleware");
 
 // ✅ GET /api/search -> Anyone can search, logged-in users get personalized data
 router.get("/", optionalAuth, searchController.globalSearch);
+router.get("/scholars", optionalAuth, searchController.searchScholars);
 
 module.exports = router;

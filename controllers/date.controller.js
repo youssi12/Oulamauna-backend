@@ -4,11 +4,35 @@ const prisma = require("../config/db");
 const VALID_DATE_TYPES = ["birth", "death"];
 const VALID_CALENDARS = ["hijri", "gregorian"];
 
-// Reasonable bounds so bad input (negative numbers, 5-digit typos, etc.)
-// doesn't silently get stored. Adjust the upper bound as needed.
+ 
 const CURRENT_GREGORIAN_YEAR = new Date().getFullYear();
 const MIN_YEAR = 1;
-const MAX_YEAR = CURRENT_GREGORIAN_YEAR + 1; // allow near-future/hijri offset slack
+const MAX_GREGORIAN_YEAR = CURRENT_GREGORIAN_YEAR + 1;
+
+    // Hijri calendar is roughly 3% shorter than Gregorian (354 vs 365 days),
+    // so it runs ahead more slowly. Rough conversion: hijri ≈ (gregorian - 622) * 1.0307
+    // Current Hijri year is ~1447 AH — give a little slack for near-future entries.
+const MAX_HIJRI_YEAR = Math.ceil((MAX_GREGORIAN_YEAR - 622) * 1.0307);
+
+function validateYear(year, calendar) {
+  if (year === undefined || year === null || year === "") {
+    return { error: null, value: null };
+  }
+
+  const parsed = Number(year);
+
+  if (!Number.isInteger(parsed)) {
+    return { error: "year must be a whole number", value: undefined };
+  }
+
+  const maxYear = calendar === "hijri" ? MAX_HIJRI_YEAR : MAX_GREGORIAN_YEAR;
+
+  if (parsed < MIN_YEAR || parsed > maxYear) {
+    return { error: `year must be between ${MIN_YEAR} and ${maxYear} for the ${calendar} calendar`, value: undefined };
+  }
+
+  return { error: null, value: parsed };
+}
 
 function validateDateType(date_type) {
   if (!VALID_DATE_TYPES.includes(date_type)) {
@@ -22,24 +46,6 @@ function validateCalendar(calendar) {
     return `calendar must be one of: ${VALID_CALENDARS.join(", ")}`;
   }
   return null;
-}
-
- 
-function validateYear(year) {
-  if (year === undefined || year === null || year === "") {
-    return { error: null, value: null };
-  }
-
-  const parsed = Number(year);
-
-  if (!Number.isInteger(parsed)) {
-    return { error: "year must be a whole number", value: undefined };
-  }
-  if (parsed < MIN_YEAR || parsed > MAX_YEAR) {
-    return { error: `year must be between ${MIN_YEAR} and ${MAX_YEAR}`, value: undefined };
-  }
-
-  return { error: null, value: parsed };
 }
 
 function validateRawText(raw_text) {
@@ -88,7 +94,7 @@ exports.createDate = async (req, res) => {
     return res.status(400).json({ success: false, message: calendarError });
   }
 
-  const { error: yearError, value: parsedYear } = validateYear(year);
+  const { error: yearError, value: parsedYear } = validateYear(year,calendar);
   if (yearError) {
     return res.status(400).json({ success: false, message: yearError });
   }
@@ -210,10 +216,7 @@ exports.updateDate = async (req, res) => {
     });
   }
 
-  const { error: yearError, value: parsedYear } = validateYear(year);
-  if (yearError) {
-    return res.status(400).json({ success: false, message: yearError });
-  }
+   
 
   const rawTextError = validateRawText(raw_text);
   if (rawTextError) {
@@ -238,6 +241,12 @@ exports.updateDate = async (req, res) => {
     if (!date) {
       return res.status(404).json({ success: false, message: "Date not found" });
     }
+    
+    const { error: yearError, value: parsedYear } = validateYear(year, date.calendar);
+    if (yearError) {
+      return res.status(400).json({ success: false, message: yearError });
+    }
+
 
     const user = await prisma.users.findUnique({
       where: { id: userId },

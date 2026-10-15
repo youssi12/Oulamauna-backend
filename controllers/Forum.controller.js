@@ -510,6 +510,13 @@ exports.reportPost = async (req, res) => {
 
   try {
     // ✅ Added 'users' include to get the author's username for the notification
+    // in reportPost, before creating
+const alreadyReported = await prisma.reports.findFirst({
+  where: { reporter_id: userId, content_type: "forum_post", content_id: postId, status: "pending" },
+});
+if (alreadyReported) {
+  return res.status(409).json({ success: false, message: "You've already reported this post" });
+}
     const post = await prisma.forum_posts.findUnique({ 
       where: { post_id: postId },
       include: { users: { select: { id: true, username: true } } } 
@@ -644,51 +651,6 @@ exports.reportComment = async (req, res) => {
 };
 
 
-// ── Get all categories (for the "Create Post" dropdown) ──
-// ── Get all categories (for the "Create Post" dropdown) ──
-exports.getCategories = async (req, res) => {
-  try {
-    const categories = await prisma.forum_categories.findMany({
-      orderBy: { display_order: "asc" },
-      include: {
-        _count: {
-          select: {
-            forum_posts: { where: { deleted_at: null } }
-          }
-        }
-      }
-    });
-
-    const formattedCategories = categories.map(cat => {
-      let parsed = cat.translations;
-      
-      // Safely parse the JSON string from the database
-      if (typeof parsed === 'string') {
-        try { 
-          parsed = JSON.parse(parsed); 
-        } catch (e) { 
-          parsed = {}; 
-        }
-      }
-      
-      // If it's not a valid object, default to an empty object
-      if (!parsed || typeof parsed !== 'object') {
-        parsed = {};
-      }
-
-      return {
-        ...cat,
-        translations: parsed, // ✅ DYNAMIC: Sends the ENTIRE translation object (en, ar, fr, es, etc.)
-        post_count: cat._count.forum_posts
-      };
-    });
-
-    res.json({ success: true, data: formattedCategories });
-  } catch (error) {
-    console.error("getCategories error:", error);
-    res.status(500).json({ success: false, message: "Server error: " + error.message });
-  }
-};
 // ── Helper: recursively collect all descendant comment ids of a given comment ──
 // Accepts a Prisma client so it also works inside a $transaction (tx).
 async function getDescendantCommentIds(client, commentId) {
@@ -752,8 +714,13 @@ exports.getAdminPosts = async (req, res) => {
 
     if (search) {
       where.OR = [
-        { title: { contains: search, mode: 'insensitive' } },
-        { content: { contains: search, mode: 'insensitive' } }
+        { title: { contains: search,
+          //  mode: 'insensitive' 
+
+        } },
+        { content: { contains: search, 
+          // mode: 'insensitive' 
+        } }
       ];
     }
 

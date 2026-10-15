@@ -1,5 +1,29 @@
 const prisma = require("../config/db");
 
+
+// helper 
+// near the top of disciplines.controller.js, or in a shared utils file if you want to reuse it elsewhere
+async function validateTranslations(translations) {
+  const languages = await prisma.languages.findMany({
+    select: { code: true },
+  });
+  const validCodes = new Set(languages.map((l) => l.code));
+
+  const keys = Object.keys(translations);
+
+  for (const key of keys) {
+    if (!validCodes.has(key)) {
+      return `"${key}" is not a valid language code. Valid codes: ${[...validCodes].join(", ")}`;
+    }
+    const value = translations[key];
+    if (typeof value !== "string" || value.trim() === "") {
+      return `Translation for "${key}" must be a non-empty string`;
+    }
+  }
+
+  return null; // no error
+}
+
 // ===================================================
 // Create discipline (Dynamic JSON translations)
 // ===================================================
@@ -14,6 +38,12 @@ exports.createDiscipline = async (req, res) => {
     });
   }
 
+
+  const translationsError = await validateTranslations(translations);   // ADD
+  if (translationsError) {                                              // ADD
+    return res.status(400).json({ success: false, message: translationsError });  // ADD
+  }
+  
   try {
     const discipline = await prisma.$transaction(async (tx) => {
       // ✅ THIS IS THE FIX: It takes the first language you filled in and uses it as 'name'.
@@ -99,9 +129,17 @@ exports.updateDiscipline = async (req, res) => {
     return res.status(400).json({ success: false, message: "Valid translations object is required" });
   }
 
-  try {
-    const discipline = await prisma.disciplines.findUnique({ where: { discipline_id: id } });
 
+  const translationsError = await validateTranslations(translations);   // ADD
+  if (translationsError) {                                              // ADD
+    return res.status(400).json({ success: false, message: translationsError });  // ADD
+  }
+
+  try {
+
+    // u can remove it and repalcle it with p2025
+    const discipline = await prisma.disciplines.findUnique({ where: { discipline_id: id } });
+ 
     if (!discipline) {
       return res.status(404).json({ success: false, message: "Discipline not found" });
     }
@@ -168,6 +206,10 @@ exports.deleteDiscipline = async (req, res) => {
 exports.uploadDisciplineImage = async (req, res) => {
   try {
     const disciplineId = parseInt(req.params.id);
+
+    if(Number.isNaN(disciplineId)) {
+      return  res.status(400).json({ success: false, message: "Invalid discipline id" });
+    }
     
     if (!req.file) {
       return res.status(400).json({ success: false, message: "No image file provided" });
@@ -186,6 +228,11 @@ exports.uploadDisciplineImage = async (req, res) => {
       data: updated
     });
   } catch (error) {
+
+    if (error.code === "P2025") {
+      return res.status(404).json({ success: false, message: "Discipline not found" });
+    }
+
     console.error("uploadDisciplineImage error:", error);
     res.status(500).json({ success: false, message: "Server error" });
   }

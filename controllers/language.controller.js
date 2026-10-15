@@ -23,3 +23,10 @@ exports.getAllLanguages = async (req, res) => {
     res.status(500).json({ success: false, message: "Server error" });
   }
 };
+
+exports.connectDiffrentLanguages = async (req,res)=>{
+  const  {acceptedVersionId,secondVersionId} = req.body;
+
+  // how it will work the father id
+
+}

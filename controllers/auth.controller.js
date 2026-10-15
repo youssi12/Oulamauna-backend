@@ -11,7 +11,7 @@ const cookieOptions = {
   sameSite: "strict",
   maxAge: 24 * 60 * 60 * 1000,
 };
- const serializeUser = (user) => ({
+const serializeUser = (user) => ({
    id: user.id,
    username: user.username,
    email: user.email,
@@ -25,6 +25,9 @@ const cookieOptions = {
    role_name: user.roles?.role_name ?? null,
  })
 
+
+
+
 exports.register = async (req, res) => {
   const { username, email, password } = req.body;
 
@@ -33,6 +36,12 @@ exports.register = async (req, res) => {
       message: "All fields are required"
     });
   }
+  if (password.length < 8) {
+  return res.status(400).json({ message: "Password must be at least 8 characters" });
+}
+if (password.length > 72) {
+  return res.status(400).json({ message: "Password must be 72 characters or fewer" });
+}
 
   try {
     // Check if username already exists
@@ -58,6 +67,7 @@ exports.register = async (req, res) => {
         message: "Email already in use"
       });
     }
+
 
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = await bcrypt.hash(password, salt);
@@ -177,21 +187,22 @@ exports.resendVerification = async (req, res) => {
 
   try {
     const user = await prisma.users.findUnique({ where: { email } });
-    if (!user) return res.status(404).json({ message: "User not found" });
-    if (user.email_verified)
-      return res.status(400).json({ message: "Email is already verified" });
+    if(user){
+          if (user.email_verified)
+             return res.status(400).json({ message: "Email is already verified" });
 
-    await prisma.email_verifications.deleteMany({ where: { user_id: user.id } });
+         await prisma.email_verifications.deleteMany({ where: { user_id: user.id } });
+         const token = crypto.randomBytes(32).toString("hex");
+         const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+         await prisma.email_verifications.create({
+             data: { user_id: user.id, token, expires_at: expiresAt }
+            });
 
-    await prisma.email_verifications.create({
-      data: { user_id: user.id, token, expires_at: expiresAt }
-    });
-
-    await sendVerificationEmail(email, token);
-    res.json({ message: "Verification email resent! Please check your inbox." });
+         await sendVerificationEmail(email, token);
+         }
+    
+    res.json({ message: "If an account exists for this email,a Verification email is resent! Please check your inbox." });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -237,7 +248,7 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role_id: user.role_id },
+      { id: user.id, email: user.email, role_id: user.role_id,token_version: user.token_version  },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
@@ -277,17 +288,15 @@ exports.forgotPassword = async (req, res) => {
 
   try {
     const user = await prisma.users.findUnique({ where: { email } });
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    const token = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
-
-    await prisma.password_resets.create({
-      data: { user_id: user.id, token, expires_at: expiresAt }
-    });
-
-    await sendResetPasswordEmail(email, token);
-    res.json({ message: "Password reset email sent. Check your inbox." });
+     
+    if (user){
+      const token = crypto.randomBytes(32).toString("hex");
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+      await prisma.password_resets.create({ data: { user_id: user.id, token, expires_at: expiresAt } });
+      await sendResetPasswordEmail(email, token);
+    }
+     
+     res.json({ message: "If an account exists for this email, a reset link has been sent." });
   } catch (error) {
     res.status(500).json({ message: "Server error", error: error.message });
   }
@@ -311,7 +320,11 @@ exports.resetPassword = async (req, res) => {
 
     await prisma.users.update({
       where: { id: reset.user_id },
-      data: { password_hash: hashedPassword }
+      data: {
+         password_hash: hashedPassword ,
+          token_version: { increment: 1 }
+        }
+      
     });
 
     await prisma.password_resets.delete({ where: { token } });

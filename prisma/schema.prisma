@@ -38,7 +38,7 @@ model disciplines {
 model email_verifications {
   id         Int      @id @default(autoincrement())
   user_id    Int
-  token      String   @db.VarChar(255)
+  token      String  @unique   @db.VarChar(255)
   expires_at DateTime @db.Timestamp(0)
   users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "email_verifications_ibfk_1")
 
@@ -121,6 +121,7 @@ model reports {
   users        users?                @relation(fields: [reporter_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "reports_ibfk_1")
 
   @@index([reporter_id], map: "reporter_id")
+  @@unique([reporter_id, content_type, content_id])
 }
 
 model roles {
@@ -287,7 +288,8 @@ model users {
   strike_count          Int                   @default(0)
   created_at            DateTime?             @db.Timestamp(0)
   email_verified        Boolean               @default(false)
-  
+  token_version Int @default(0)
+
   email_verifications   email_verifications[]
   media                 media[]
   notifications         notifications[]
