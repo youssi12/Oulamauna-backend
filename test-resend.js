@@ -1,19 +1,29 @@
-
 require("dotenv").config();
-const { Resend } = require("resend");
-
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 async function testEmail() {
   try {
-    const result = await resend.emails.send({
-      from: "Oulamauna <onboarding@resend.dev>",
-      to: ["oulamauna.official@gmail.com"],
-      subject: "Oulamauna email test",
-      html: "<p>Your email service is working!</p>",
+    const res = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "api-key": process.env.BREVO_API_KEY,
+        "Content-Type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify({
+        sender: { name: "Oulamauna", email: process.env.USER_EMAIL },
+        to: [{ email: "oulamauna.official@gmail.com" }],
+        subject: "Oulamauna email test",
+        htmlContent: "<p>Your email service is working!</p>",
+      }),
     });
 
-    console.log("Resend response:", result);
+    const data = await res.json();
+
+    if (!res.ok) {
+      console.error("Brevo error:", res.status, data);
+      return;
+    }
+    console.log("Email sent:", data);
   } catch (error) {
     console.error("Email error:", error);
   }
