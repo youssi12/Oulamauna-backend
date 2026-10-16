@@ -347,22 +347,29 @@ exports.getDashboardData = async (req, res) => {
       return { name: user ? user.username : "Unknown User", count: tc._count.created_by };
     });
 
-    // 8. Top Disciplines
-    const approvedVersionIds = await prisma.scholar_versions.findMany({ where: { status: "approved" }, select: { version_id: true } });
-    const ids = approvedVersionIds.map(v => v.version_id);
-    const disciplineLinks = ids.length > 0 ? await prisma.scholar_disciplines.findMany({
-      where: { version_id: { in: ids } }, include: { disciplines: true }
-    }) : [];
-    
-    const discCounts = {};
-    disciplineLinks.forEach(link => {
-      const name = link.disciplines?.name || "Uncategorized";
-      discCounts[name] = (discCounts[name] || 0) + 1;
+    // 8. Top Disciplines (Optimized: Database handles the counting)
+    const disciplinesWithCounts = await prisma.disciplines.findMany({
+      select: {
+        name: true,
+        _count: {
+          select: {
+            scholar_disciplines: {
+              where: {
+                scholar_versions: { 
+                  status: "approved" 
+                }
+              }
+            }
+          }
+        }
+      }
     });
-    const topDisciplines = Object.entries(discCounts)
-      .sort(([, a], [, b]) => b - a)
-      .slice(0, 5)
-      .map(([name, count]) => ({ name, count }));
+
+    const topDisciplines = disciplinesWithCounts
+      .map(d => ({ name: d.name, count: d._count.scholar_disciplines }))
+      .filter(d => d.count > 0)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
 
     // 9. Pending Age Distribution
     const pendingVersions = await prisma.scholar_versions.findMany({ where: { status: "pending" }, select: { created_at: true } });
