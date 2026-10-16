@@ -7,19 +7,18 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
 model contact_messages {
-  id           Int                    @id @default(autoincrement())
-  name         String                 @db.VarChar(255)
-  email        String                 @db.VarChar(255)
-  subject      String?                @db.VarChar(255)
-  message      String                 @db.Text
-  status       contact_message_status @default(pending)
-  created_at   DateTime               @default(now()) @db.Timestamp(0)
-  updated_at   DateTime?              @db.Timestamp(0)
-  replied_at   DateTime?              @db.Timestamp(0)
-  admin_reply  String?                @db.Text
-  admin_note   String?                @db.Text
+  id          Int                    @id @default(autoincrement())
+  name        String                 @db.VarChar(255)
+  email       String                 @db.VarChar(255)
+  subject     String?                @db.VarChar(255)
+  message     String                 @db.Text
+  status      contact_message_status @default(pending)
+  created_at  DateTime               @default(now()) @db.Timestamp(0)
+  updated_at  DateTime?              @db.Timestamp(0)
+  replied_at  DateTime?              @db.Timestamp(0)
+  admin_reply String?                @db.Text
+  admin_note  String?                @db.Text
 
   @@index([status])
   @@index([created_at])
@@ -27,61 +26,45 @@ model contact_messages {
 }
 
 model disciplines {
-  discipline_id       Int                   @id @default(autoincrement())
-  name                String                @db.VarChar(255)
-  image_url           String?               @db.VarChar(500)
-  translations        Json?
-  created_at          DateTime?             @db.Timestamp(0)
-  scholar_disciplines scholar_disciplines[]
+  discipline_id Int       @id @default(autoincrement())
+  name          String    @db.VarChar(255)
+  image_url     String?   @db.VarChar(500)
+  translations  Json?
+  created_at    DateTime? @db.Timestamp(0)
 }
 
 model email_verifications {
   id         Int      @id @default(autoincrement())
   user_id    Int
-  token      String  @unique   @db.VarChar(255)
+  token      String   @unique @db.VarChar(255)
   expires_at DateTime @db.Timestamp(0)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "email_verifications_ibfk_1")
 
   @@index([user_id], map: "user_id")
 }
 
-
-
 model languages {
-  language_id       Int                @id @default(autoincrement())
-  code              String?            @db.VarChar(255)
-  name              String?            @db.VarChar(255)
-
-  scholar_versions  scholar_versions[]
-  users_preferred   users[]
+  language_id Int     @id @default(autoincrement())
+  code        String? @db.VarChar(255)
+  name        String? @db.VarChar(255)
 }
 
 model media {
-  media_id          Int  @id @default(autoincrement())
+  media_id          Int               @id @default(autoincrement())
   previous_media_id Int?
   version_id        Int
-
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_1")
-  file_name        String?          @db.VarChar(255)
-  file_path        String?          @db.VarChar(500)
-  media_url        String?          @db.VarChar(500)
-
-  source_type media_source_type @default(upload)
-  file_type   media_file_type?
-  status      media_status?
-
-  uploaded_by Int?
-
-  users users? @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "media_ibfk_2")
-
-  uploaded_at DateTime? @db.Timestamp(0)
-  view_count  Int       @default(0)
-  like_count  Int       @default(0) // here sould i be rmeoved and to its newe table ?
-
-  title       String?       @db.VarChar(255)
-  year        Int?
-  description String?       @db.Text
-  media_likes media_likes[]
+  file_name         String?           @db.VarChar(255)
+  file_path         String?           @db.VarChar(500)
+  media_url         String?           @db.VarChar(500)
+  source_type       media_source_type @default(upload)
+  file_type         media_file_type?
+  status            media_status?
+  uploaded_by       Int?
+  uploaded_at       DateTime?         @db.Timestamp(0)
+  view_count        Int               @default(0)
+  like_count        Int               @default(0)
+  title             String?           @db.VarChar(255)
+  year              Int?
+  description       String?           @db.Text
 
   @@index([version_id], map: "version_id")
   @@index([uploaded_by], map: "uploaded_by")
@@ -95,7 +78,6 @@ model notifications {
   related_entity  String?             @db.VarChar(255)
   is_read         Boolean?
   created_at      DateTime?           @db.Timestamp(0)
-  users           users?              @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "notifications_ibfk_1")
 
   @@index([user_id], map: "user_id")
 }
@@ -105,7 +87,6 @@ model password_resets {
   user_id    Int
   token      String   @unique(map: "token") @db.VarChar(255)
   expires_at DateTime @db.Timestamp(0)
-  users      users    @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "password_resets_ibfk_1")
 
   @@index([user_id], map: "user_id")
 }
@@ -118,24 +99,21 @@ model reports {
   reason       String?               @db.Text
   status       String?               @db.VarChar(255)
   created_at   DateTime?             @db.Timestamp(0)
-  users        users?                @relation(fields: [reporter_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "reports_ibfk_1")
 
-  @@index([reporter_id], map: "reporter_id")
   @@unique([reporter_id, content_type, content_id])
+  @@index([reporter_id], map: "reporter_id")
   @@index([status])
 }
 
 model roles {
   role_id   Int     @id @default(autoincrement())
   role_name String? @unique(map: "role_name") @db.VarChar(255)
-  users     users[]
 }
 
 model scholar_aliases {
-  alias_id         Int               @id @default(autoincrement())
-  version_id       Int?
-  alias_name       String?           @db.VarChar(255)
-  scholar_versions scholar_versions? @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_aliases_ibfk_1")
+  alias_id   Int     @id @default(autoincrement())
+  version_id Int?
+  alias_name String? @db.VarChar(255)
 
   @@index([version_id], map: "version_id")
 }
@@ -143,19 +121,14 @@ model scholar_aliases {
 model scholar_contributors {
   scholar_id Int
   user_id    Int
-  scholars   scholars @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_contributors_ibfk_1")
-  users      users    @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_contributors_ibfk_2")
 
   @@id([scholar_id, user_id])
   @@index([user_id], map: "user_id")
 }
 
-// NEW
 model scholar_disciplines {
-  version_id       Int
-  discipline_id    Int
-  disciplines      disciplines      @relation(fields: [discipline_id], references: [discipline_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_disciplines_ibfk_1")
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade, map: "scholar_disciplines_ibfk_2")
+  version_id    Int
+  discipline_id Int
 
   @@id([version_id, discipline_id])
   @@index([discipline_id], map: "discipline_id")
@@ -163,65 +136,33 @@ model scholar_disciplines {
 }
 
 model scholar_relationships {
-  relation_id        Int @id @default(autoincrement())
-  version_id         Int // The version that HAS this relationship
-  related_version_id Int // The version of the RELATED scholar
-
-  relation_type scholar_relationships_relation_type?
-
-  // Relations to the specific language versions
-  scholar_version         scholar_versions @relation("scholar_version_relationships", fields: [version_id], references: [version_id], onDelete: Cascade)
-  related_scholar_version scholar_versions @relation("related_scholar_version_relationships", fields: [related_version_id], references: [version_id], onDelete: Cascade)
+  relation_id        Int                                  @id @default(autoincrement())
+  version_id         Int
+  related_version_id Int
+  relation_type      scholar_relationships_relation_type?
 
   @@index([version_id], map: "version_id")
   @@index([related_version_id], map: "related_version_id")
 }
 
 model scholar_versions {
-  version_id     Int     @id @default(autoincrement())
-  scholar_id     Int?
-  language_id    Int?
-  canonical_name String? @db.VarChar(255)
-
-  region_id Int?
-  regions   regions? @relation(fields: [region_id], references: [region_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_4")
-
+  version_id              Int                      @id @default(autoincrement())
+  scholar_id              Int?
+  language_id             Int?
+  canonical_name          String?                  @db.VarChar(255)
+  region_id               Int?
   century_hijri_start     Int?
   century_hijri_end       Int?
   century_gregorian_start Int?
   century_gregorian_end   Int?
-  biography               String? @db.Text
-
-  // CURRENT APPROVED IMAGE
-  image_url    String?       @db.VarChar(500)
-  image_status media_status?
-
-  // Who uploaded the currently stored image
-  image_uploaded_by Int?
-
-  status     scholar_versions_status?
-  created_by Int?
-  created_at DateTime?                @db.Timestamp(0)
-
-  
-  version_type    scholar_versions_type @default(creation)
-  scholar_aliases scholar_aliases[]
-
-  scholars  scholars?  @relation(fields: [scholar_id], references: [scholar_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_1")
-  languages languages? @relation(fields: [language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_2")
-  users     users?     @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholar_versions_ibfk_3")
-
-  scholar_references  scholar_references[]
-  scholar_works       scholar_works[]
-  media               media[]
-  scholar_dates       scholar_dates[]
-  scholar_disciplines scholar_disciplines[]
-  
-
-  img_versions img_versions[]
-
-  scholar_relationships_as_source scholar_relationships[] @relation("scholar_version_relationships")
-  scholar_relationships_as_target scholar_relationships[] @relation("related_scholar_version_relationships")
+  biography               String?                  @db.Text
+  image_url               String?                  @db.VarChar(500)
+  image_status            media_status?
+  image_uploaded_by       Int?
+  status                  scholar_versions_status?
+  created_by              Int?
+  created_at              DateTime?                @db.Timestamp(0)
+  version_type            scholar_versions_type    @default(creation)
 
   @@index([created_by], map: "created_by")
   @@index([language_id], map: "language_id")
@@ -233,18 +174,12 @@ model scholar_versions {
 }
 
 model img_versions {
-  img_version_id Int @id @default(autoincrement())
-
-  version_id Int
-  image_url  String @db.VarChar(500)
-
-  status media_status @default(pending)
-
-  uploaded_by Int
-  created_at  DateTime? @db.Timestamp(0)
-
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: NoAction, onUpdate: NoAction)
-  users            users            @relation(fields: [uploaded_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  img_version_id Int          @id @default(autoincrement())
+  version_id     Int
+  image_url      String       @db.VarChar(500)
+  status         media_status @default(pending)
+  uploaded_by    Int
+  created_at     DateTime?    @db.Timestamp(0)
 
   @@index([version_id])
   @@index([uploaded_by])
@@ -252,90 +187,58 @@ model img_versions {
 }
 
 model scholar_references {
-  reference_id          Int  @id @default(autoincrement())
+  reference_id          Int          @id @default(autoincrement())
   version_id            Int
   created_by            Int?
   previous_reference_id Int?
-
-  title    String?      @db.VarChar(255)
-  citation String?      @db.Text
-  url      String?      @db.VarChar(500)
-  status   media_status @default(pending)
-
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
-  users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  title                 String?      @db.VarChar(255)
+  citation              String?      @db.Text
+  url                   String?      @db.VarChar(500)
+  status                media_status @default(pending)
 
   @@index([version_id])
   @@index([status])
+  @@index([created_by], map: "scholar_references_created_by_fkey")
 }
 
 model scholars {
-  scholar_id     Int              @id @default(autoincrement())
-  created_by     Int?
-  created_at     DateTime?        @db.Timestamp(0)
- 
- is_featured    Boolean          @default(false)
-
-  scholar_contributors scholar_contributors[]
-  scholar_versions     scholar_versions[]
-  users                users?                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholars_ibfk_1")
+  scholar_id  Int       @id @default(autoincrement())
+  created_by  Int?
+  created_at  DateTime? @db.Timestamp(0)
+  is_featured Boolean   @default(false)
 
   @@index([created_by], map: "created_by")
   @@index([is_featured])
 }
 
 model users {
-  id                    Int                   @id @default(autoincrement())
-  username              String?               @unique(map: "username") @db.VarChar(255)
-  email                 String?               @unique(map: "email") @db.VarChar(255)
-  password_hash         String?               @db.VarChar(255)
+  id                    Int                      @id @default(autoincrement())
+  username              String?                  @unique(map: "username") @db.VarChar(255)
+  email                 String?                  @unique(map: "email") @db.VarChar(255)
+  password_hash         String?                  @db.VarChar(255)
   role_id               Int?
-  is_banned             Boolean?              @default(false)
-  strike_count          Int                   @default(0)
-  created_at            DateTime?             @db.Timestamp(0)
-  email_verified        Boolean               @default(false)
-  token_version Int @default(0)
-
-  email_verifications   email_verifications[]
-  media                 media[]
-  notifications         notifications[]
-  password_resets       password_resets[]
-  reports               reports[]
-  allowed_to_contribute Boolean               @default(true)
-  name             String? @db.VarChar(255)
-  bio              String? @db.Text
-  profile_picture  String? @db.VarChar(500)
-  links            Json?
-  contributorBadge Boolean @default(false)
-  preferred_language_id Int? @default(1)
-  notifications_enabled Boolean @default(true)
-  profile_visibility   profile_visibility_type? @default(public)    
-  show_email            Boolean @default(false)
-  show_contributions    Boolean @default(true)
-  is_active             Boolean @default(true)
-  deactivated_at        DateTime? @db.Timestamp(0)
-
-  languages_preferred languages? @relation(fields: [preferred_language_id], references: [language_id], onDelete: NoAction, onUpdate: NoAction)
-
-
-
-
-
-  scholar_contributors scholar_contributors[]
-  scholar_versions     scholar_versions[]
-  scholars             scholars[]
-  scholar_works        scholar_works[]
-  img_versions         img_versions[]
-  scholar_references   scholar_references[]
-  roles                roles?                 @relation(fields: [role_id], references: [role_id], onDelete: NoAction, onUpdate: NoAction, map: "users_ibfk_1")
-  forum_posts          forum_posts[]
-  forum_comments       forum_comments[]
-  forum_post_likes     forum_post_likes[]
-  forum_comment_likes  forum_comment_likes[]
-  media_likes          media_likes[]
+  is_banned             Boolean?                 @default(false)
+  strike_count          Int                      @default(0)
+  created_at            DateTime?                @db.Timestamp(0)
+  email_verified        Boolean                  @default(false)
+  token_version         Int                      @default(0)
+  allowed_to_contribute Boolean                  @default(true)
+  name                  String?                  @db.VarChar(255)
+  bio                   String?                  @db.Text
+  profile_picture       String?                  @db.VarChar(500)
+  links                 Json?
+  contributorBadge      Boolean                  @default(false)
+  preferred_language_id Int?                     @default(1)
+  notifications_enabled Boolean                  @default(true)
+  profile_visibility    profile_visibility_type? @default(public)
+  show_email            Boolean                  @default(false)
+  show_contributions    Boolean                  @default(true)
+  is_active             Boolean                  @default(true)
+  deactivated_at        DateTime?                @db.Timestamp(0)
 
   @@index([role_id], map: "role_id")
   @@index([is_banned, allowed_to_contribute])
+  @@index([preferred_language_id], map: "users_preferred_language_id_fkey")
 }
 
 model regions {
@@ -343,18 +246,6 @@ model regions {
   name         String    @db.VarChar(255)
   translations Json?
   created_at   DateTime? @db.Timestamp(0)
-
-  scholar_versions scholar_versions[]
-}
-
-enum scholar_date_type {
-  birth
-  death
-}
-
-enum calendar_type {
-  hijri
-  gregorian
 }
 
 model scholar_dates {
@@ -362,64 +253,33 @@ model scholar_dates {
   version_id     Int
   date_type      scholar_date_type
   calendar       calendar_type
-  year           Int? // structured year — enables filtering/sorting/century derivation
-  is_approximate Boolean           @default(false) // "circa" flag
-  raw_text       String?           @db.VarChar(100) // fallback display, e.g. "early 4th century" or "disputed"
-
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
+  year           Int?
+  is_approximate Boolean           @default(false)
+  raw_text       String?           @db.VarChar(100)
 
   @@unique([version_id, date_type, calendar])
   @@index([version_id])
 }
 
-enum notifications_type {
-  NEW_SCHOLAR_SUBMISSION
-  EDIT_PROPOSAL
-  REPORT_SUBMITTED
-  
-  SCHOLAR_APPROVED
-  SCHOLAR_REJECTED
-  MEDIA_APPROVED
-  MEDIA_REJECTED
-  IMAGE_APPROVED
-  IMAGE_REJECTED
-  WORK_APPROVED
-  WORK_REJECTED
-  REFERENCE_APPROVED
-  REFERENCE_REJECTED
-  NEW_DISCIPLINE_SUBMISSION
-  NEW_REGION_SUBMISSION
-  
-  // ✅ NEW: Forum Notifications
-  NEW_FORUM_POST
-  COMMENT_ON_POST
-  REPLY_TO_COMMENT
-}
-
 model scholar_works {
-  work_id          Int  @id @default(autoincrement())
+  work_id          Int                @id @default(autoincrement())
   version_id       Int
   created_by       Int?
   previous_work_id Int?
-
-  title       String      @db.VarChar(255)
-  year        Int?
-  format      work_format
-  description String?     @db.Text
-
-  media_url   String?            @db.VarChar(500)
-  file_name   String?            @db.VarChar(255)
-  file_path   String?            @db.VarChar(500)
-  source_type media_source_type?
-  status      media_status       @default(pending)
-
-  is_featured Boolean            @default(false)
-
-  scholar_versions scholar_versions @relation(fields: [version_id], references: [version_id], onDelete: Cascade)
-  users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  title            String             @db.VarChar(255)
+  year             Int?
+  format           work_format
+  description      String?            @db.Text
+  media_url        String?            @db.VarChar(500)
+  file_name        String?            @db.VarChar(255)
+  file_path        String?            @db.VarChar(500)
+  source_type      media_source_type?
+  status           media_status       @default(pending)
+  is_featured      Boolean            @default(false)
 
   @@index([version_id])
   @@index([status])
+  @@index([created_by], map: "scholar_works_created_by_fkey")
 }
 
 model forum_categories {
@@ -429,8 +289,6 @@ model forum_categories {
   description   String?   @db.Text
   display_order Int       @default(0)
   created_at    DateTime? @db.Timestamp(0)
-
-  forum_posts forum_posts[]
 }
 
 model forum_posts {
@@ -440,17 +298,10 @@ model forum_posts {
   title       String    @db.VarChar(255)
   content     String    @db.Text
   like_count  Int       @default(0)
-  is_hidden   Boolean   @default(false) // ✅ ADDED: For auto-hiding due to reports
+  is_hidden   Boolean   @default(false)
   created_at  DateTime? @db.Timestamp(0)
   updated_at  DateTime? @db.Timestamp(0)
   deleted_at  DateTime? @db.Timestamp(0)
-
-  users users? @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-
-  forum_categories forum_categories? @relation(fields: [category_id], references: [category_id], onDelete: NoAction, onUpdate: NoAction)
-
-  forum_comments   forum_comments[]
-  forum_post_likes forum_post_likes[]
 
   @@index([user_id])
   @@index([category_id])
@@ -470,12 +321,6 @@ model forum_comments {
   updated_at        DateTime? @db.Timestamp(0)
   deleted_at        DateTime? @db.Timestamp(0)
 
-  forum_posts         forum_posts           @relation(fields: [post_id], references: [post_id], onDelete: Cascade)
-  users               users?                @relation(fields: [user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  parent              forum_comments?       @relation("CommentReplies", fields: [parent_comment_id], references: [comment_id], onDelete: NoAction, onUpdate: NoAction)
-  replies             forum_comments[]      @relation("CommentReplies")
-  forum_comment_likes forum_comment_likes[]
-
   @@index([post_id])
   @@index([parent_comment_id])
   @@index([user_id])
@@ -488,11 +333,9 @@ model forum_post_likes {
   user_id    Int
   created_at DateTime? @db.Timestamp(0)
 
-  forum_posts forum_posts @relation(fields: [post_id], references: [post_id], onDelete: Cascade)
-  users       users       @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
   @@unique([post_id, user_id])
   @@index([post_id])
+  @@index([user_id], map: "forum_post_likes_user_id_fkey")
 }
 
 model forum_comment_likes {
@@ -501,11 +344,9 @@ model forum_comment_likes {
   user_id    Int
   created_at DateTime? @db.Timestamp(0)
 
-  forum_comments forum_comments @relation(fields: [comment_id], references: [comment_id], onDelete: Cascade)
-  users          users          @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
   @@unique([comment_id, user_id])
   @@index([comment_id])
+  @@index([user_id], map: "forum_comment_likes_user_id_fkey")
 }
 
 model media_likes {
@@ -514,11 +355,40 @@ model media_likes {
   user_id    Int
   created_at DateTime? @db.Timestamp(0)
 
-  media media @relation(fields: [media_id], references: [media_id], onDelete: Cascade)
-  users users @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
   @@unique([media_id, user_id])
   @@index([media_id])
+  @@index([user_id], map: "media_likes_user_id_fkey")
+}
+
+enum scholar_date_type {
+  birth
+  death
+}
+
+enum calendar_type {
+  hijri
+  gregorian
+}
+
+enum notifications_type {
+  NEW_SCHOLAR_SUBMISSION
+  EDIT_PROPOSAL
+  REPORT_SUBMITTED
+  SCHOLAR_APPROVED
+  SCHOLAR_REJECTED
+  MEDIA_APPROVED
+  MEDIA_REJECTED
+  IMAGE_APPROVED
+  IMAGE_REJECTED
+  WORK_APPROVED
+  WORK_REJECTED
+  REFERENCE_APPROVED
+  REFERENCE_REJECTED
+  NEW_DISCIPLINE_SUBMISSION
+  NEW_REGION_SUBMISSION
+  NEW_FORUM_POST
+  COMMENT_ON_POST
+  REPLY_TO_COMMENT
 }
 
 enum reports_content_type {
@@ -585,9 +455,8 @@ enum work_format {
   OTHER
 }
 
-
-enum profile_visibility_type{
-   public
+enum profile_visibility_type {
+  public
   registered_only
   private
 }
