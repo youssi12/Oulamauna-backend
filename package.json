@@ -28,7 +28,8 @@
     "mysql2": "^3.17.4",
     "nodemailer": "^8.0.4",
     "prisma": "^5.22.0",
-    "recharts": "^3.10.1"
+    "recharts": "^3.10.1",
+    "resend": "^6.34.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.0"
