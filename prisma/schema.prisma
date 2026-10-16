@@ -122,6 +122,7 @@ model reports {
 
   @@index([reporter_id], map: "reporter_id")
   @@unique([reporter_id, content_type, content_id])
+  @@index([status])
 }
 
 model roles {
@@ -226,6 +227,9 @@ model scholar_versions {
   @@index([language_id], map: "language_id")
   @@index([scholar_id], map: "scholar_id")
   @@index([region_id], map: "region_id")
+  @@index([status, created_at])
+  @@index([scholar_id, language_id, status])
+  @@index([status, version_type])
 }
 
 model img_versions {
@@ -262,6 +266,7 @@ model scholar_references {
   users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([version_id])
+  @@index([status])
 }
 
 model scholars {
@@ -276,6 +281,7 @@ model scholars {
   users                users?                 @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "scholars_ibfk_1")
 
   @@index([created_by], map: "created_by")
+  @@index([is_featured])
 }
 
 model users {
@@ -329,6 +335,7 @@ model users {
   media_likes          media_likes[]
 
   @@index([role_id], map: "role_id")
+  @@index([is_banned, allowed_to_contribute])
 }
 
 model regions {
@@ -412,6 +419,7 @@ model scholar_works {
   users            users?           @relation(fields: [created_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@index([version_id])
+  @@index([status])
 }
 
 model forum_categories {
@@ -446,6 +454,8 @@ model forum_posts {
 
   @@index([user_id])
   @@index([category_id])
+  @@index([deleted_at])
+  @@index([is_hidden])
 }
 
 model forum_comments {
@@ -469,6 +479,7 @@ model forum_comments {
   @@index([post_id])
   @@index([parent_comment_id])
   @@index([user_id])
+  @@index([deleted_at])
 }
 
 model forum_post_likes {
