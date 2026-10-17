@@ -18,6 +18,9 @@ app.set("trust proxy", 1);
 app.use(express.json())
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser()); 
+app.get("/health", (req, res) => {
+  res.status(200).send("ok");
+});
 
 // ROUTES
 app.use('/api/auth',require("./routes/auth.route"));
