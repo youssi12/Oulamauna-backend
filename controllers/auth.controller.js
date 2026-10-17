@@ -228,26 +228,13 @@ exports.login = async (req, res) => {
   }
 
   try {
-    console.log("LOGIN HANDLER START:", Date.now());
-    const startTime = Date.now();
-    const timings = {};
-
-    const mark = (name) => {
-      timings[name] = Date.now() - startTime;
-    };
-
     // 1. Find user and role
     const user = await prisma.users.findUnique({
       where: { email },
       include: { roles: true }
     });
 
-    mark("userLookup");
-
     if (!user) {
-      mark("total");
-      console.log("Login timings:", timings);
-
       return res.status(401).json({
         message: "Invalid credentials"
       });
@@ -255,9 +242,6 @@ exports.login = async (req, res) => {
 
     // 2. Check whether account is banned
     if (user.is_banned) {
-      mark("total");
-      console.log("Login timings:", timings);
-
       return res.status(403).json({
         message: "Your account has been banned",
         code: "ACCOUNT_BANNED"
@@ -265,19 +249,9 @@ exports.login = async (req, res) => {
     }
 
     // 3. Verify password
-    const t0 = Date.now();
-    const match = await bcrypt.compare(
-      password,
-      user.password_hash
-    );
-    console.log("bcrypt.compare took", Date.now() - t0, "ms");
-
-    mark("passwordCompare");
+    const match = await bcrypt.compare(password, user.password_hash);
 
     if (!match) {
-      mark("total");
-      console.log("Login timings:", timings);
-
       return res.status(401).json({
         message: "Invalid credentials"
       });
@@ -285,9 +259,6 @@ exports.login = async (req, res) => {
 
     // 4. Check email verification
     if (!user.email_verified) {
-      mark("total");
-      console.log("Login timings:", timings);
-
       return res.status(403).json({
         message: "Please verify your email before logging in",
         code: "EMAIL_NOT_VERIFIED",
@@ -308,8 +279,6 @@ exports.login = async (req, res) => {
       user.is_active = true;
     }
 
-    mark("accountChecks");
-
     // 6. Generate JWT
     const token = jwt.sign(
       {
@@ -322,21 +291,12 @@ exports.login = async (req, res) => {
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
 
-    mark("tokenGeneration");
-
     // 7. Set cookie and return response
     res.cookie("token", token, cookieOptions);
 
-    const responseUser = serializeUser(user);
-
-    mark("serialization");
-    mark("total");
-
-    console.log("Login timings:", timings);
-
     return res.json({
       token,
-      user: responseUser
+      user: serializeUser(user)
     });
 
   } catch (error) {
