@@ -265,10 +265,12 @@ exports.login = async (req, res) => {
     }
 
     // 3. Verify password
+    const t0 = Date.now();
     const match = await bcrypt.compare(
       password,
       user.password_hash
     );
+    console.log("bcrypt.compare took", Date.now() - t0, "ms");
 
     mark("passwordCompare");
 
