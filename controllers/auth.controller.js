@@ -1,6 +1,6 @@
 const prisma = require("../config/db");
 const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
+const bcrypt = require("bcrypt");
 const crypto = require("crypto");
 const { sendVerificationEmail, sendResetPasswordEmail } = require("../service/email.service");
 require("dotenv").config();
