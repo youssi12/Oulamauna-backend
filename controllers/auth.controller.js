@@ -47,10 +47,17 @@ if (password.length > 72) {
 }
 
   try {
-    // Check if username already exists
-    const existingUsername = await prisma.users.findUnique({
-      where: { username }
-    });
+    // Check username and email in parallel
+    const [existingUsername, existingEmail] = await Promise.all([
+      prisma.users.findUnique({
+        where: { username },
+        select: { id: true }
+      }),
+      prisma.users.findUnique({
+        where: { email },
+        select: { id: true }
+      })
+    ]);
 
     if (existingUsername) {
       return res.status(409).json({
@@ -58,11 +65,6 @@ if (password.length > 72) {
         message: "Username already in use"
       });
     }
-
-    // Check if email already exists
-    const existingEmail = await prisma.users.findUnique({
-      where: { email }
-    });
 
     if (existingEmail) {
       return res.status(409).json({
@@ -72,11 +74,11 @@ if (password.length > 72) {
     }
 
 
-    const salt = await bcrypt.genSalt(12);
-    const hashedPassword = await bcrypt.hash(password, salt);
+   const hashedPassword = await bcrypt.hash(password, 12);
 
     const userRole = await prisma.roles.findFirst({
-      where: { role_name: "user" }
+      where: { role_name: "user" },
+      select: { role_id: true }
     });
 
     if (!userRole) {
