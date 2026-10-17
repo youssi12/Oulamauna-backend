@@ -112,7 +112,9 @@ if (password.length > 72) {
       }
     });
 
-    await sendVerificationEmail(email, token);
+    sendVerificationEmail(email, token).catch((err) =>
+  console.error("Verification email failed:", err.message)
+);
 
     return res.status(201).json({
       message: "User created successfully"
@@ -202,7 +204,9 @@ exports.resendVerification = async (req, res) => {
              data: { user_id: user.id, token, expires_at: expiresAt }
             });
 
-         await sendVerificationEmail(email, token);
+         sendVerificationEmail(email, token).catch((err) =>
+  console.error("Verification email failed:", err.message)
+);
          }
     
     res.json({ message: "If an account exists for this email,a Verification email is resent! Please check your inbox." });
@@ -266,18 +270,8 @@ exports.login = async (req, res) => {
   }
 };
 
-exports.getme = async (req, res) => {
-  try {
-    const user = await prisma.users.findUnique({
-      where: { id: req.user.id },
-      include: { roles: true },
-    });
-    if (!user) return res.status(404).json({ message: "User not found" });
-
-    return res.json(serializeUser(user));
-  } catch (error) {
-    res.status(500).json({ message: "Server error", error: error.message });
-  }
+exports.getme = (req, res) => {
+  return res.json(serializeUser(req.user));
 };
 
 exports.logout = (req, res) => {
@@ -296,7 +290,9 @@ exports.forgotPassword = async (req, res) => {
       const token = crypto.randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
       await prisma.password_resets.create({ data: { user_id: user.id, token, expires_at: expiresAt } });
-      await sendResetPasswordEmail(email, token);
+      sendResetPasswordEmail(email, token).catch((err) =>
+  console.error("Reset email failed:", err.message)
+);
     }
      
      res.json({ message: "If an account exists for this email, a reset link has been sent." });

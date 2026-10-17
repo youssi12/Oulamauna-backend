@@ -8,25 +8,32 @@ const protect = async (req, res, next) => {
     return res.status(401).json({ message: 'Authentication required' });
   }
 
+  // 1) Check the token itself
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    // ✅ Fetch the FRESH user data from the database to check for live bans
+    decoded = jwt.verify(token, process.env.JWT_SECRET);
+  } catch (err) {
+    return res.status(403).json({ message: 'Invalid or expired token' });
+  }
+
+  // 2) Load the fresh user from the database
+  try {
     const user = await prisma.users.findUnique({
       where: { id: decoded.id },
       select: {
         id: true, email: true, username: true, role_id: true,
         is_banned: true, allowed_to_contribute: true,
-        token_version: true, // ✅ NEW — needed to detect stale tokens
+        token_version: true,
+        name: true, bio: true, links: true,
+        profile_picture: true, contributorBadge: true,
         roles: { select: { role_name: true } }
       }
     });
-
 
     if (!user) {
       return res.status(401).json({ message: 'User not found' });
     }
 
-    // ✅ NEW — reject tokens issued before the user's last password reset
     if (decoded.token_version !== user.token_version) {
       return res.status(401).json({
         message: 'Session expired, please log in again.',
@@ -34,7 +41,6 @@ const protect = async (req, res, next) => {
       });
     }
 
-     
     if (user.is_banned) {
       return res.status(403).json({
         message: 'Your account has been banned.',
@@ -42,11 +48,11 @@ const protect = async (req, res, next) => {
       });
     }
 
-    
-    req.user = user; 
+    req.user = user;
     next();
   } catch (err) {
-    return res.status(403).json({ message: 'Invalid or expired token' });
+    console.error("protect: database error:", err.message);
+    return res.status(500).json({ message: 'Server error' });
   }
 };
 
