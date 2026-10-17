@@ -47,6 +47,7 @@ if (password.length > 72) {
 }
 
   try {
+    console.log("REGISTER HANDLER START:", Date.now());
     // Check username and email in parallel
     const [existingUsername, existingEmail] = await Promise.all([
       prisma.users.findUnique({
@@ -219,56 +220,129 @@ exports.resendVerification = async (req, res) => {
 
 exports.login = async (req, res) => {
   const { email, password } = req.body;
-  if (!email || !password)
-    return res.status(400).json({ message: "Please enter all values" });
+
+  if (!email || !password) {
+    return res.status(400).json({
+      message: "Please enter all values"
+    });
+  }
 
   try {
+    console.log("LOGIN HANDLER START:", Date.now());
+    const startTime = Date.now();
+    const timings = {};
+
+    const mark = (name) => {
+      timings[name] = Date.now() - startTime;
+    };
+
+    // 1. Find user and role
     const user = await prisma.users.findUnique({
       where: { email },
-      include: { roles: true },
+      include: { roles: true }
     });
-    if (!user) return res.status(401).json({ message: "Invalid credentials" });
 
-    // ✅ UPDATED: Added the 'code' field so the frontend can detect it
-    if (user.is_banned) {
-      return res.status(403).json({ 
-        message: "Your account has been banned",
-        code: "ACCOUNT_BANNED" 
+    mark("userLookup");
+
+    if (!user) {
+      mark("total");
+      console.log("Login timings:", timings);
+
+      return res.status(401).json({
+        message: "Invalid credentials"
       });
     }
 
-    const match = await bcrypt.compare(password, user.password_hash);
-    if (!match)
-      return res.status(401).json({ message: "Invalid credentials" });
+    // 2. Check whether account is banned
+    if (user.is_banned) {
+      mark("total");
+      console.log("Login timings:", timings);
 
-    if (!user.email_verified)
+      return res.status(403).json({
+        message: "Your account has been banned",
+        code: "ACCOUNT_BANNED"
+      });
+    }
+
+    // 3. Verify password
+    const match = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    mark("passwordCompare");
+
+    if (!match) {
+      mark("total");
+      console.log("Login timings:", timings);
+
+      return res.status(401).json({
+        message: "Invalid credentials"
+      });
+    }
+
+    // 4. Check email verification
+    if (!user.email_verified) {
+      mark("total");
+      console.log("Login timings:", timings);
+
       return res.status(403).json({
         message: "Please verify your email before logging in",
         code: "EMAIL_NOT_VERIFIED",
-        email: user.email,
+        email: user.email
       });
-
-        if (!user.is_active) {
-      await prisma.users.update({
-        where: { id: user.id },
-        data: { is_active: true, deactivated_at: null },
-      });
-      user.is_active = true; // keep the in-memory object consistent for serializeUser below
     }
 
+    // 5. Reactivate account if needed
+    if (!user.is_active) {
+      await prisma.users.update({
+        where: { id: user.id },
+        data: {
+          is_active: true,
+          deactivated_at: null
+        }
+      });
+
+      user.is_active = true;
+    }
+
+    mark("accountChecks");
+
+    // 6. Generate JWT
     const token = jwt.sign(
-      { id: user.id, email: user.email, role_id: user.role_id,token_version: user.token_version  },
+      {
+        id: user.id,
+        email: user.email,
+        role_id: user.role_id,
+        token_version: user.token_version
+      },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
 
+    mark("tokenGeneration");
+
+    // 7. Set cookie and return response
     res.cookie("token", token, cookieOptions);
-    res.json({
+
+    const responseUser = serializeUser(user);
+
+    mark("serialization");
+    mark("total");
+
+    console.log("Login timings:", timings);
+
+    return res.json({
       token,
-      user: serializeUser(user),
+      user: responseUser
     });
+
   } catch (error) {
-    res.status(500).json({ message: "Server error", error: error.message });
+    console.error("Login Error:", error);
+
+    return res.status(500).json({
+      message: "Server error"
+    });
   }
 };
 
